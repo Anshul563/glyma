@@ -1,37 +1,35 @@
-#include "glyma/core/compositor.hpp"
+#include "glyma/core/document.hpp"
 #include "glyma/core/image_buffer.hpp"
-#include "glyma/core/layer.hpp"
-#include "glyma/core/layer_stack.hpp"
+#include "glyma/core/pixel.hpp"
 
 #include <iostream>
 
 int main() {
-    glyma::core::ImageBuffer canvas(4, 4);
-    canvas.clear({0, 0, 0, 255});
+    glyma::core::Document document("Demo", 4, 4);
+    document.setSolidBackground(glyma::core::Pixel{255, 0, 0, 255});
 
-    glyma::core::LayerStack stack;
+    auto bg = document.addCanvasLayer("BackgroundFill");
+    if (auto* layer = document.findLayer(bg)) {
+        layer->buffer().clear(glyma::core::Pixel{255, 0, 0, 255});
+    }
 
-    // Bottom layer: red background
-    glyma::core::Layer background("Background", 4, 4);
-    background.buffer().clear({255, 0, 0, 255});
-    stack.addLayer(std::move(background));
+    auto fg = document.addCanvasLayer("Foreground");
+    if (auto* layer = document.findLayer(fg)) {
+        layer->buffer().clear(glyma::core::Pixel{0, 0, 255, 128});
+        layer->setPosition(1, 1);
+        layer->setOpacity(1.0F);
+    }
 
-    // Top layer: blue square, partially transparent, offset
-    glyma::core::Layer foreground("Foreground", 2, 2);
-    foreground.buffer().clear({0, 0, 255, 128});
-    foreground.setPosition(1, 1);
-    foreground.setOpacity(1.0F);
-    stack.addLayer(std::move(foreground));
-
-    glyma::core::Compositor::composite(stack, canvas);
+    const glyma::core::ImageBuffer canvas = document.render();
 
     std::cout << "Glyma Image Engine\n";
+    std::cout << "Document: " << document.name() << "\n";
     std::cout << "Canvas: " << canvas.width() << " x " << canvas.height() << "\n";
-    std::cout << "Layer stack size: " << stack.size() << "\n";
+    std::cout << "Layers: " << document.layerCount() << "\n";
 
     const auto p00 = canvas.getPixel(0, 0);
-    const auto p22 = canvas.getPixel(2, 2);
     const auto p11 = canvas.getPixel(1, 1);
+    const auto p22 = canvas.getPixel(2, 2);
 
     std::cout << "Pixel (0,0): RGBA("
               << static_cast<int>(p00.r) << ", "
@@ -51,3 +49,4 @@ int main() {
 
     return 0;
 }
+
