@@ -49,8 +49,8 @@ Thumbs.db
 # Debug/Logs/Temp
 *.log
 *.dSYM/
-core
-core.*
+/core
+/core.*
 *.stackdump
 *.pid
 *.seed
