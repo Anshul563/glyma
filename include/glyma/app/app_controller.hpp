@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include <QObject>
 #include <QString>
@@ -9,8 +10,11 @@
 #include "glyma/core/brush.hpp"
 #include "glyma/core/brush_engine.hpp"
 #include "glyma/core/command_history.hpp"
+#include "glyma/core/commands.hpp"
 #include "glyma/core/document.hpp"
+#include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
+#include "glyma/core/selection.hpp"
 
 namespace glyma::app {
 
@@ -45,6 +49,28 @@ public:
     bool cancelBrushStroke();
     [[nodiscard]] bool isBrushStrokeActive() const noexcept;
 
+    // Selection API. Positions are document-space coordinates. While a drag is
+    // in progress the live selection is held by the controller; committing it
+    // pushes an undoable SelectCommand onto the history.
+    [[nodiscard]] const core::Selection& selection() const noexcept;
+    [[nodiscard]] bool isSelecting() const noexcept;
+    [[nodiscard]] core::Selection::Type selectionType() const noexcept;
+
+    void beginSelection(core::Selection::Type type, double documentX, double documentY);
+    void updateSelection(double documentX, double documentY);
+    void endSelection();
+    void cancelSelection();
+    void clearSelection();
+    void invertSelection();
+
+    // Fill API.
+    [[nodiscard]] const core::FillSettings& fillSettings() const noexcept;
+    bool setFillSettings(const core::FillSettings& settings);
+    // Fill the contiguous region containing the document position on the
+    // selected layer, respecting the active selection. Returns true when a
+    // non-empty fill was recorded as one undoable command.
+    bool bucketFill(double documentX, double documentY);
+
     bool newDocument(
         const QString& name,
         std::uint32_t width,
@@ -72,6 +98,7 @@ signals:
     void documentChanged();
     void layersChanged();
     void selectionChanged(quint64 layerId);
+    void pixelSelectionChanged();
     void historyChanged();
     void filePathChanged(const QString& path);
     void errorOccurred(const QString& message);
@@ -94,7 +121,13 @@ private:
     core::BrushMode brushMode_{core::BrushMode::Paint};
     double strokeOffsetX_{0.0};
     double strokeOffsetY_{0.0};
+    std::optional<core::Selection> pendingSelection_;
+    core::Selection::Type pendingSelectionType_{core::Selection::Type::None};
+    bool selecting_{false};
+    double dragStartX_{0.0};
+    double dragStartY_{0.0};
     core::CommandHistory history_;
+    core::FillSettings fillSettings_;
     core::LayerId selectedLayerId_{core::Layer::invalidId};
     QString filePath_;
     std::uint64_t savedRevision_{0};

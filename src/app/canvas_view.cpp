@@ -10,6 +10,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
 #include <QPixmap>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -61,6 +62,69 @@ private:
     QBrush brush_;
 };
 
+// Dashed selection overlay drawn in document (scene) coordinates, on top of
+// the image but independent of its pixels.
+class SelectionItem : public QGraphicsItem {
+public:
+    explicit SelectionItem(const core::Selection& selection)
+        : selection_(selection) {
+        setZValue(1.0);
+    }
+
+    void setSelection(const core::Selection& selection) {
+        prepareGeometryChange();
+        selection_ = selection;
+        update();
+    }
+
+    [[nodiscard]] QRectF boundingRect() const override {
+        double left = 0.0;
+        double top = 0.0;
+        double right = 0.0;
+        double bottom = 0.0;
+        if (!selection_.bounds(left, top, right, bottom)) {
+            return QRectF();
+        }
+        // Small margin so the cosmetic stroke is fully contained.
+        const double margin = 1.0;
+        return QRectF(left - margin, top - margin,
+                      (right - left) + 2.0 * margin,
+                      (bottom - top) + 2.0 * margin);
+    }
+
+    void paint(
+        QPainter* painter,
+        const QStyleOptionGraphicsItem*,
+        QWidget*
+    ) override {
+        if (selection_.isEmpty()) {
+            return;
+        }
+        QPen pen(QColor(0, 200, 255), 1.0, Qt::DashLine, Qt::RoundCap,
+                 Qt::RoundJoin);
+        pen.setCosmetic(true);
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+
+        double left = 0.0;
+        double top = 0.0;
+        double right = 0.0;
+        double bottom = 0.0;
+        if (!selection_.bounds(left, top, right, bottom)) {
+            return;
+        }
+        const QRectF rect(left, top, right - left, bottom - top);
+        if (selection_.type() == core::Selection::Type::Ellipse) {
+            painter->drawEllipse(rect);
+        } else {
+            painter->drawRect(rect);
+        }
+    }
+
+private:
+    core::Selection selection_;
+};
+
 CanvasView::CanvasView(QWidget* parent)
     : QGraphicsView(parent) {
     setObjectName(QStringLiteral("canvasView"));
@@ -86,6 +150,10 @@ CanvasView::CanvasView(QWidget* parent)
     pixmapItem_->setTransformationMode(Qt::SmoothTransformation);
     pixmapItem_->setZValue(0.0);
     scene_->addItem(pixmapItem_);
+
+    selectionItem_ = new SelectionItem(core::Selection{});
+    selectionItem_->hide();
+    scene_->addItem(selectionItem_);
 
     checkerboard_->hide();
     pixmapItem_->hide();
@@ -134,6 +202,28 @@ double CanvasView::zoom() const noexcept {
 
 bool CanvasView::isFitMode() const noexcept {
     return fitMode_;
+}
+
+CanvasView::Tool CanvasView::activeTool() const noexcept {
+    return activeTool_;
+}
+
+void CanvasView::setActiveTool(Tool tool) {
+    activeTool_ = tool;
+    // A tool change ends any in-progress drag.
+    if (selecting_) {
+        selecting_ = false;
+        emit selectionDragCancelled();
+    }
+    drawing_ = false;
+    panning_ = false;
+    setCursor(Qt::CrossCursor);
+    selectionItem_->hide();
+}
+
+void CanvasView::setSelection(const core::Selection& selection) {
+    selectionItem_->setSelection(selection);
+    selectionItem_->setVisible(!selection.isEmpty());
 }
 
 double CanvasView::clampZoom(double zoom) noexcept {
@@ -235,8 +325,22 @@ void CanvasView::mousePressEvent(QMouseEvent* event) {
             return;
         }
         setFocus(Qt::MouseFocusReason);
-        drawing_ = true;
-        emit strokeStarted(documentPosition(event->position()));
+        const QPointF documentPos = documentPosition(event->position());
+        switch (activeTool_) {
+        case Tool::Brush:
+            drawing_ = true;
+            emit strokeStarted(documentPos);
+            break;
+        case Tool::SelectRectangle:
+        case Tool::SelectEllipse:
+            selecting_ = true;
+            selectionStart_ = documentPos;
+            emit selectionDragStarted(selectionStart_);
+            break;
+        case Tool::BucketFill:
+            emit bucketFillRequested(documentPos);
+            break;
+        }
         event->accept();
         return;
     }
@@ -249,11 +353,19 @@ void CanvasView::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (event->button() == Qt::RightButton && drawing_) {
-        drawing_ = false;
-        emit strokeCancelled();
-        event->accept();
-        return;
+    if (event->button() == Qt::RightButton) {
+        if (selecting_) {
+            selecting_ = false;
+            emit selectionDragCancelled();
+            event->accept();
+            return;
+        }
+        if (drawing_) {
+            drawing_ = false;
+            emit strokeCancelled();
+            event->accept();
+            return;
+        }
     }
 
     QGraphicsView::mousePressEvent(event);
@@ -274,6 +386,12 @@ void CanvasView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
+    if (selecting_) {
+        emit selectionDragMoved(documentPosition(event->position()));
+        event->accept();
+        return;
+    }
+
     if (drawing_) {
         emit strokeMoved(documentPosition(event->position()));
         event->accept();
@@ -284,6 +402,14 @@ void CanvasView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void CanvasView::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && selecting_) {
+        selecting_ = false;
+        emit selectionDragCompleted(selectionStart_,
+                                    documentPosition(event->position()));
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton && drawing_) {
         drawing_ = false;
         emit strokeEnded();
@@ -302,11 +428,19 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void CanvasView::keyPressEvent(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Escape && drawing_) {
-        drawing_ = false;
-        emit strokeCancelled();
-        event->accept();
-        return;
+    if (event->key() == Qt::Key_Escape) {
+        if (selecting_) {
+            selecting_ = false;
+            emit selectionDragCancelled();
+            event->accept();
+            return;
+        }
+        if (drawing_) {
+            drawing_ = false;
+            emit strokeCancelled();
+            event->accept();
+            return;
+        }
     }
     QGraphicsView::keyPressEvent(event);
 }

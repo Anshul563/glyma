@@ -244,6 +244,59 @@ void MainWindow::createToolOptions() {
     toolBar->addAction(eraserToolAction_);
     toolBar->addSeparator();
 
+    rectangleSelectAction_ = makeAction(
+        this, tr("&Rectangle Select"), QKeySequence(QStringLiteral("R")),
+        QStringLiteral("actionToolRectangleSelect")
+    );
+    rectangleSelectAction_->setCheckable(true);
+    rectangleSelectAction_->setIcon(
+        style()->standardIcon(QStyle::SP_FileDialogContentsView)
+    );
+
+    ellipseSelectAction_ = makeAction(
+        this, tr("&Ellipse Select"), QKeySequence(),
+        QStringLiteral("actionToolEllipseSelect")
+    );
+    ellipseSelectAction_->setCheckable(true);
+    ellipseSelectAction_->setIcon(
+        style()->standardIcon(QStyle::SP_FileDialogDetailedView)
+    );
+
+    bucketFillAction_ = makeAction(
+        this, tr("&Bucket Fill"), QKeySequence(),
+        QStringLiteral("actionToolBucketFill")
+    );
+    bucketFillAction_->setCheckable(true);
+    bucketFillAction_->setIcon(
+        style()->standardIcon(QStyle::SP_DialogApplyButton)
+    );
+
+    toolGroup_->addAction(rectangleSelectAction_);
+    toolGroup_->addAction(ellipseSelectAction_);
+    toolGroup_->addAction(bucketFillAction_);
+    toolBar->addAction(rectangleSelectAction_);
+    toolBar->addAction(ellipseSelectAction_);
+    toolBar->addAction(bucketFillAction_);
+    toolBar->addSeparator();
+
+    clearSelectionAction_ = makeAction(
+        this, tr("&Clear Selection"), QKeySequence(),
+        QStringLiteral("actionSelectClear")
+    );
+    clearSelectionAction_->setIcon(
+        style()->standardIcon(QStyle::SP_DialogCancelButton)
+    );
+    invertSelectionAction_ = makeAction(
+        this, tr("&Invert Selection"), QKeySequence(),
+        QStringLiteral("actionSelectInvert")
+    );
+    invertSelectionAction_->setIcon(
+        style()->standardIcon(QStyle::SP_DialogResetButton)
+    );
+    toolBar->addAction(clearSelectionAction_);
+    toolBar->addAction(invertSelectionAction_);
+    toolBar->addSeparator();
+
     colorButton_ = new QToolButton(toolBar);
     colorButton_->setObjectName(QStringLiteral("toolColorButton"));
     colorButton_->setAutoRaise(true);
@@ -290,23 +343,65 @@ void MainWindow::createToolOptions() {
         0, 100, 100, QStringLiteral("%")
     );
 
+    fillToleranceSpin_ = addSpin(
+        tr("Tolerance"), QStringLiteral("fillToleranceSpin"),
+        0, core::FillSettings::maxTolerance, 0, QStringLiteral("")
+    );
+    fillToleranceSpin_->setToolTip(
+        tr("Per-channel absolute difference tolerance for the fill seed match")
+    );
+    fillOpacitySpin_ = addSpin(
+        tr("Opacity"), QStringLiteral("fillOpacitySpin"),
+        0, 100, 100, QStringLiteral("%")
+    );
+
     connect(brushToolAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::Brush);
             controller_.setBrushMode(core::BrushMode::Paint);
         }
     });
     connect(eraserToolAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::Brush);
             controller_.setBrushMode(core::BrushMode::Erase);
         }
     });
+    connect(rectangleSelectAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::SelectRectangle);
+        }
+    });
+    connect(ellipseSelectAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::SelectEllipse);
+        }
+    });
+    connect(bucketFillAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::BucketFill);
+        }
+    });
+    connect(clearSelectionAction_, &QAction::triggered, this, [this] {
+        controller_.clearSelection();
+    });
+    connect(invertSelectionAction_, &QAction::triggered, this, [this] {
+        controller_.invertSelection();
+    });
     connect(colorButton_, &QToolButton::clicked, this, [this] {
         chooseBrushColor();
+    });
+    connect(fillToleranceSpin_, &QSpinBox::valueChanged, this, [this] {
+        applyFillSettings();
+    });
+    connect(fillOpacitySpin_, &QSpinBox::valueChanged, this, [this] {
+        applyFillSettings();
     });
 
     brushToolAction_->setChecked(true);
     updateColorButton();
     applyBrushSettings();
+    applyFillSettings();
 }
 
 void MainWindow::createStatusBar() {
@@ -343,10 +438,32 @@ void MainWindow::connectSignals() {
         controller_.cancelBrushStroke();
     });
 
+    connect(canvas_, &CanvasView::selectionDragStarted, this, [this](const QPointF& position) {
+        const auto type = canvas_->activeTool() == CanvasView::Tool::SelectEllipse
+            ? core::Selection::Type::Ellipse : core::Selection::Type::Rectangle;
+        controller_.beginSelection(type, position.x(), position.y());
+    });
+    connect(canvas_, &CanvasView::selectionDragMoved, this, [this](const QPointF& position) {
+        controller_.updateSelection(position.x(), position.y());
+    });
+    connect(canvas_, &CanvasView::selectionDragCompleted, this, [this] {
+        controller_.endSelection();
+    });
+    connect(canvas_, &CanvasView::selectionDragCancelled, this, [this] {
+        controller_.cancelSelection();
+    });
+    connect(canvas_, &CanvasView::bucketFillRequested, this, [this](const QPointF& position) {
+        controller_.bucketFill(position.x(), position.y());
+    });
+
     connect(&controller_, &AppController::documentChanged, this, [this] {
         refreshCanvas();
+        canvas_->setSelection(controller_.selection());
         refreshStatus();
         updateTitle();
+    });
+    connect(&controller_, &AppController::pixelSelectionChanged, this, [this] {
+        canvas_->setSelection(controller_.selection());
     });
     connect(&controller_, &AppController::layersChanged, this, [this] {
         refreshLayers();
@@ -628,6 +745,20 @@ void MainWindow::applyBrushSettings() {
     controller_.setBrushSettings(settings);
 }
 
+void MainWindow::applyFillSettings() {
+    core::FillSettings settings;
+    settings.color = core::Pixel{
+        static_cast<std::uint8_t>(brushColor_.red()),
+        static_cast<std::uint8_t>(brushColor_.green()),
+        static_cast<std::uint8_t>(brushColor_.blue()),
+        static_cast<std::uint8_t>(brushColor_.alpha())
+    };
+    settings.opacity =
+        static_cast<float>(fillOpacitySpin_->value()) / 100.0F;
+    settings.tolerance = fillToleranceSpin_->value();
+    controller_.setFillSettings(settings);
+}
+
 void MainWindow::updateColorButton() {
     QPixmap swatch(18, 18);
     swatch.fill(Qt::transparent);
@@ -650,10 +781,12 @@ void MainWindow::chooseBrushColor() {
     brushColor_ = chosen;
     updateColorButton();
     applyBrushSettings();
+    applyFillSettings();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     controller_.endBrushStroke();
+    controller_.cancelSelection();
     if (!prepareForDestructiveAction()) {
         event->ignore();
         return;

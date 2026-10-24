@@ -8,6 +8,7 @@
 #include "glyma/core/layer.hpp"
 #include "glyma/core/layer_stack.hpp"
 #include "glyma/core/pixel.hpp"
+#include "glyma/core/selection.hpp"
 
 namespace glyma::core {
 
@@ -54,6 +55,10 @@ public:
 
     [[nodiscard]] std::size_t layerCount() const noexcept;
 
+    // The active pixel selection for this document. Empty by default.
+    [[nodiscard]] const core::Selection& selection() const noexcept;
+    void setSelection(const core::Selection& selection) noexcept;
+
     // Add a new transparent layer sized to the canvas. Returns layer ID.
     LayerId addCanvasLayer(std::string name);
     // Add an existing layer (must have dimensions compatible? We don't require
@@ -82,5 +87,7 @@ private:
     bool transparentBackground_{true};
     Pixel backgroundColor_{0, 0, 0, 0};
     LayerStack layerStack_;
+    core::Selection selection_;
 };
+
 } // namespace glyma::core

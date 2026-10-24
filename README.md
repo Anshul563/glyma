@@ -74,8 +74,12 @@ remains Qt-independent; the application layer owns the active `Document`, its
   and Cancel choices; modified documents show a `*` in the title bar.
 - Brush and eraser tools with foreground color, size, opacity, and hardness
   controls in a dedicated tool options bar.
-- Undo/redo for brush/eraser strokes and layer add/remove/reorder/rename,
-  visibility, and opacity changes through the engine command history.
+- Rectangle and ellipse selection tools with clear/invert actions, plus a
+  bucket fill tool with tolerance and opacity controls that fills with the
+  foreground color.
+- Undo/redo for brush/eraser strokes, selection changes, bucket fills, and layer
+  add/remove/reorder/rename, visibility, and opacity changes through the engine
+  command history.
 - Dark neutral Qt stylesheet with a neutral workspace around the canvas.
 
 File and Edit actions use the existing engine serialization, PNG, and
@@ -106,6 +110,28 @@ no Qt dependencies; the canvas only supplies document-space pointer positions.
   are exact without full-document snapshots.
 - Left-button drag draws. Middle-button drag pans. Escape or a right-button
   press cancels the in-progress stroke.
+
+## Selection and Bucket Fill
+
+The selection model lives in `include/glyma/core/selection.hpp` and
+`src/engine/selection.cpp`; the flood-fill engine lives in
+`include/glyma/core/fill.hpp` and `src/engine/fill.cpp`. Both are Qt-independent.
+
+- `Rectangle Select` (`R`) and `Ellipse Select` drag out a rectangular or
+  elliptical selection; drags in any direction are normalized. The `Clear
+  Selection` and `Invert Selection` toolbar buttons remove the selection and
+  select its complement. The active tool is highlighted in the tool bar.
+- Selections are geometry-only (a region type plus bounds) with an `inverted`
+  flag, so they stay cheap to copy and compare; there is no full-document mask.
+  Geometry is clipped to the document bounds.
+- `Bucket Fill` flood-fills the selected layer with the foreground color,
+  starting from the clicked pixel using 4-connectivity. Tolerance (0-255 per
+  channel, alpha included) and opacity 0-100% are configurable in the tool
+  options bar.
+- Fills respect the active selection: only selected pixels are changed. Fill
+  blending uses the same straight-alpha source-over model as the brush.
+- A selection change and a bucket fill are each one command-history entry,
+  storing the previous selection or the sparse set of changed pixels.
 
 ## PNG Import/Export
 
@@ -195,7 +221,7 @@ Undo/redo history is session-only and is not serialized.
 ## Known limitations
 
 - No JPEG/WebP/SVG/PSD support.
-- No selections, transformations, or GPU rendering.
+- No transformations or GPU rendering.
 - No textured brushes, pressure sensitivity, brush dynamics, or advanced brush
   presets.
 - No layer blending modes, duplication, merging, grouping, or drag-and-drop

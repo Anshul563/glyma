@@ -8,6 +8,7 @@
 #include "glyma/core/image_buffer.hpp"
 #include "glyma/core/layer.hpp"
 #include "glyma/core/pixel.hpp"
+#include "glyma/core/selection.hpp"
 
 namespace glyma::core {
 
@@ -96,6 +97,48 @@ private:
     float oldOpacity_{1.0F};
     std::int32_t oldX_{0};
     std::int32_t oldY_{0};
+};
+
+// Replace the document selection with `nextSelection`, storing the previous
+// selection so the change can be undone.
+class SelectCommand : public Command {
+public:
+    SelectCommand(const core::Selection& previousSelection,
+                  const core::Selection& nextSelection);
+
+    [[nodiscard]] std::string name() const override;
+    bool execute(Document& document) override;
+    bool undo(Document& document) override;
+
+private:
+    core::Selection previous_;
+    core::Selection next_;
+};
+
+// Clear the document selection, storing the previous selection for undo.
+class ClearSelectionCommand : public Command {
+public:
+    explicit ClearSelectionCommand(const core::Selection& previousSelection);
+
+    [[nodiscard]] std::string name() const override;
+    bool execute(Document& document) override;
+    bool undo(Document& document) override;
+
+private:
+    core::Selection previous_;
+};
+
+// Invert the document selection, storing the previous selection for undo.
+class InvertSelectionCommand : public Command {
+public:
+    explicit InvertSelectionCommand(const core::Selection& previousSelection);
+
+    [[nodiscard]] std::string name() const override;
+    bool execute(Document& document) override;
+    bool undo(Document& document) override;
+
+private:
+    core::Selection previous_;
 };
 
 } // namespace glyma::core

@@ -44,6 +44,7 @@ Document::Document(std::string name, std::uint32_t width, std::uint32_t height)
     if (static_cast<std::uint64_t>(width_) > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) / static_cast<std::uint64_t>(height_)) {
         throw std::length_error("Document dimensions are too large.");
     }
+    selection_.setDocumentSize(width_, height_);
 }
 
 Document::Id Document::id() const noexcept {
@@ -99,6 +100,15 @@ const LayerStack& Document::layerStack() const noexcept {
 
 std::size_t Document::layerCount() const noexcept {
     return layerStack_.size();
+}
+
+const core::Selection& Document::selection() const noexcept {
+    return selection_;
+}
+
+void Document::setSelection(const core::Selection& selection) noexcept {
+    selection_ = selection;
+    selection_.setDocumentSize(width_, height_);
 }
 
 LayerId Document::addCanvasLayer(std::string name) {

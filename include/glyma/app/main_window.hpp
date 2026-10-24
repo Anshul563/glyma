@@ -5,6 +5,8 @@
 
 #include "glyma/app/app_controller.hpp"
 #include "glyma/app/document_lifecycle.hpp"
+#include "glyma/core/fill.hpp"
+#include "glyma/core/selection.hpp"
 
 class QAction;
 class QActionGroup;
@@ -46,6 +48,7 @@ private:
     void applyBrushSettings();
     void updateColorButton();
     void chooseBrushColor();
+    void applyFillSettings();
 
     void onNew();
     void onOpen();
@@ -83,10 +86,17 @@ private:
     QActionGroup* toolGroup_{nullptr};
     QAction* brushToolAction_{nullptr};
     QAction* eraserToolAction_{nullptr};
+    QAction* rectangleSelectAction_{nullptr};
+    QAction* ellipseSelectAction_{nullptr};
+    QAction* bucketFillAction_{nullptr};
+    QAction* clearSelectionAction_{nullptr};
+    QAction* invertSelectionAction_{nullptr};
     QToolButton* colorButton_{nullptr};
     QSpinBox* brushSizeSpin_{nullptr};
     QSpinBox* brushOpacitySpin_{nullptr};
     QSpinBox* brushHardnessSpin_{nullptr};
+    QSpinBox* fillToleranceSpin_{nullptr};
+    QSpinBox* fillOpacitySpin_{nullptr};
     QColor brushColor_{0, 0, 0, 255};
 };
 

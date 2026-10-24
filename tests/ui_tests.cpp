@@ -19,7 +19,9 @@
 #include "glyma/app/main_window.hpp"
 #include "glyma/app/qt_image.hpp"
 #include "glyma/core/document.hpp"
+#include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
+#include "glyma/core/selection.hpp"
 
 namespace {
 
@@ -30,10 +32,12 @@ using glyma::app::toQImage;
 using glyma::core::BrushMode;
 using glyma::core::BrushSettings;
 using glyma::core::Document;
+using glyma::core::FillSettings;
 using glyma::core::ImageBuffer;
 using glyma::core::Layer;
 using glyma::core::LayerId;
 using glyma::core::Pixel;
+using glyma::core::Selection;
 
 bool nearlyEqual(double lhs, double rhs) {
     return std::abs(lhs - rhs) < 1e-9;
@@ -501,6 +505,168 @@ void testControllerFileOperations() {
     assert(!window.controller().isModified());
 }
 
+void testSelectionToolControls() {
+    MainWindow window;
+    auto* rectSel = window.findChild<QAction*>(
+        QStringLiteral("actionToolRectangleSelect"));
+    auto* ellipseSel = window.findChild<QAction*>(
+        QStringLiteral("actionToolEllipseSelect"));
+    auto* bucket = window.findChild<QAction*>(QStringLiteral("actionToolBucketFill"));
+    auto* clearSel = window.findChild<QAction*>(QStringLiteral("actionSelectClear"));
+    auto* invertSel = window.findChild<QAction*>(QStringLiteral("actionSelectInvert"));
+    assert(rectSel != nullptr);
+    assert(ellipseSel != nullptr);
+    assert(bucket != nullptr);
+    assert(clearSel != nullptr);
+    assert(invertSel != nullptr);
+
+    assert(rectSel->isCheckable());
+    assert(ellipseSel->isCheckable());
+    assert(bucket->isCheckable());
+    assert(!rectSel->isChecked());
+    assert(!ellipseSel->isChecked());
+    assert(!bucket->isChecked());
+    assert(window.controller().selection().isEmpty());
+
+    auto* canvas = window.findChild<CanvasView*>(QStringLiteral("canvasView"));
+    assert(canvas != nullptr);
+
+    rectSel->trigger();
+    QCoreApplication::processEvents();
+    assert(rectSel->isChecked());
+    assert(canvas->activeTool() == CanvasView::Tool::SelectRectangle);
+
+    ellipseSel->trigger();
+    QCoreApplication::processEvents();
+    assert(ellipseSel->isChecked());
+    assert(!rectSel->isChecked());
+    assert(canvas->activeTool() == CanvasView::Tool::SelectEllipse);
+
+    bucket->trigger();
+    QCoreApplication::processEvents();
+    assert(bucket->isChecked());
+    assert(!ellipseSel->isChecked());
+    assert(canvas->activeTool() == CanvasView::Tool::BucketFill);
+
+    // Clear / invert are immediate (non-exclusive) actions.
+    clearSel->trigger();
+    QCoreApplication::processEvents();
+    assert(window.controller().document().selection().isEmpty());
+
+    invertSel->trigger();
+    QCoreApplication::processEvents();
+    assert(!window.controller().document().selection().isEmpty());
+    double left = 0, top = 0, right = 0, bottom = 0;
+    assert(window.controller().document().selection().bounds(
+               left, top, right, bottom));
+    const Document& document = window.controller().document();
+    assert(std::abs(right - document.width()) < 1e-9);
+    assert(std::abs(bottom - document.height()) < 1e-9);
+}
+
+void testControllerSelectionIntegration() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Sel"), 8, 8));
+    assert(controller.selection().isEmpty());
+    assert(!controller.isSelecting());
+
+    controller.beginSelection(Selection::Type::Rectangle, 2.0, 2.0);
+    assert(controller.isSelecting());
+    assert(controller.selectionType() == Selection::Type::Rectangle);
+
+    controller.updateSelection(5.0, 5.0);
+    const Selection& live = controller.selection();
+    assert(!live.isEmpty());
+    double left = 0, top = 0, right = 0, bottom = 0;
+    assert(live.bounds(left, top, right, bottom));
+    assert(std::abs(left - 2.0) < 1e-9);
+    assert(std::abs(top - 2.0) < 1e-9);
+    assert(std::abs(right - 5.0) < 1e-9);
+    assert(std::abs(bottom - 5.0) < 1e-9);
+
+    // Committing pushes one undoable command.
+    controller.endSelection();
+    assert(!controller.isSelecting());
+    assert(controller.canUndo());
+    const Selection& committed = controller.document().selection();
+    assert(!committed.isEmpty());
+    assert(committed.bounds(left, top, right, bottom));
+    assert(std::abs(right - 5.0) < 1e-9);
+
+    assert(controller.undo());
+    assert(controller.document().selection().isEmpty());
+
+    assert(controller.redo());
+    assert(!controller.document().selection().isEmpty());
+    assert(controller.document().selection().bounds(left, top, right, bottom));
+    assert(std::abs(right - 5.0) < 1e-9);
+
+    // Reverse-direction drag normalizes the geometry.
+    controller.beginSelection(Selection::Type::Rectangle, 7.0, 7.0);
+    controller.updateSelection(1.0, 1.0);
+    controller.endSelection();
+    assert(controller.document().selection().bounds(left, top, right, bottom));
+    assert(std::abs(left - 1.0) < 1e-9);
+    assert(std::abs(top - 1.0) < 1e-9);
+    assert(std::abs(right - 7.0) < 1e-9);
+    assert(std::abs(bottom - 7.0) < 1e-9);
+}
+
+void testBucketFillIntegration() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Fill"), 4, 4));
+    const LayerId id = controller.selectedLayerId();
+    Layer* layer = controller.document().findLayer(id);
+    assert(layer != nullptr);
+    layer->buffer().clear(Pixel{100, 100, 100, 255});
+
+    FillSettings settings;
+    settings.color = Pixel{255, 255, 255, 255};
+    settings.opacity = 1.0F;
+    settings.tolerance = 0;
+    assert(controller.setFillSettings(settings));
+
+    assert(controller.bucketFill(2.0, 2.0));
+    assert(controller.canUndo());
+    assert(layer->buffer().getPixel(2, 2) == (Pixel{255, 255, 255, 255}));
+
+    assert(controller.undo());
+    assert(layer->buffer().getPixel(2, 2) == (Pixel{100, 100, 100, 255}));
+
+    assert(controller.redo());
+    assert(layer->buffer().getPixel(2, 2) == (Pixel{255, 255, 255, 255}));
+
+    // With an active selection, only selected pixels are filled.
+    layer->buffer().clear(Pixel{100, 100, 100, 255});
+    controller.beginSelection(Selection::Type::Rectangle, 0.0, 0.0);
+    controller.updateSelection(2.0, 2.0);
+    controller.endSelection();
+    assert(controller.document().selection().pixelSelected(1, 1));
+    assert(!controller.document().selection().pixelSelected(3, 3));
+
+    assert(controller.bucketFill(1.0, 1.0));
+    assert(layer->buffer().getPixel(1, 1) == (Pixel{255, 255, 255, 255}));
+    assert(layer->buffer().getPixel(3, 3) == (Pixel{100, 100, 100, 255}));
+}
+
+void testSelectionOverlayDoesNotModifyPixels() {
+    MainWindow window;
+    auto* canvas = window.findChild<CanvasView*>(QStringLiteral("canvasView"));
+    assert(canvas != nullptr);
+
+    const Document& document = window.controller().document();
+    const auto before =
+        document.layerStack().layers().front().buffer().pixels();
+
+    Selection selection;
+    selection.setDocumentSize(8, 8);
+    selection.setRectangle(1.0, 1.0, 4.0, 4.0);
+    canvas->setSelection(selection);
+
+    assert(!selection.isEmpty());
+    assert(document.layerStack().layers().front().buffer().pixels() == before);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -525,6 +691,10 @@ int main(int argc, char* argv[]) {
     testBrushToolControls();
     testControllerBrushIntegration();
     testCanvasDocumentMapping();
+    testSelectionToolControls();
+    testControllerSelectionIntegration();
+    testBucketFillIntegration();
+    testSelectionOverlayDoesNotModifyPixels();
     testControllerFailurePaths();
     testControllerFileOperations();
 

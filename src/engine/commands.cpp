@@ -210,4 +210,59 @@ bool ChangeLayerPropertiesCommand::undo(Document& document) {
     }
 }
 
+SelectCommand::SelectCommand(
+    const core::Selection& previousSelection,
+    const core::Selection& nextSelection
+) : previous_(previousSelection), next_(nextSelection) {}
+
+std::string SelectCommand::name() const {
+    return "Select";
+}
+
+bool SelectCommand::execute(Document& document) {
+    document.setSelection(next_);
+    return true;
+}
+
+bool SelectCommand::undo(Document& document) {
+    document.setSelection(previous_);
+    return true;
+}
+
+ClearSelectionCommand::ClearSelectionCommand(const core::Selection& previousSelection)
+    : previous_(previousSelection) {}
+
+std::string ClearSelectionCommand::name() const {
+    return "ClearSelection";
+}
+
+bool ClearSelectionCommand::execute(Document& document) {
+    document.setSelection(core::Selection{});
+    return true;
+}
+
+bool ClearSelectionCommand::undo(Document& document) {
+    document.setSelection(previous_);
+    return true;
+}
+
+InvertSelectionCommand::InvertSelectionCommand(const core::Selection& previousSelection)
+    : previous_(previousSelection) {}
+
+std::string InvertSelectionCommand::name() const {
+    return "InvertSelection";
+}
+
+bool InvertSelectionCommand::execute(Document& document) {
+    core::Selection inverted = document.selection();
+    inverted.invert();
+    document.setSelection(inverted);
+    return true;
+}
+
+bool InvertSelectionCommand::undo(Document& document) {
+    document.setSelection(previous_);
+    return true;
+}
+
 } // namespace glyma::core
