@@ -12,6 +12,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
 
+option(GLYMA_BUILD_APP "Build the Qt 6 desktop application" ON)
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PNG REQUIRED libpng)
 
@@ -74,11 +76,41 @@ target_compile_options(glyma_core PRIVATE
     -Wpedantic
 )
 
-add_executable(glyma
+add_executable(glyma_demo
     src/main.cpp
 )
 
-target_link_libraries(glyma PRIVATE glyma_core)
+target_link_libraries(glyma_demo PRIVATE glyma_core)
+target_compile_options(glyma_demo PRIVATE -Wall -Wextra -Wpedantic)
+
+if(GLYMA_BUILD_APP)
+    find_package(Qt6 REQUIRED COMPONENTS Widgets
+        HINTS "$ENV{HOME}/.local/qt6/usr"
+    )
+
+    add_library(glyma_app_ui STATIC
+        include/glyma/app/app_controller.hpp
+        include/glyma/app/canvas_view.hpp
+        include/glyma/app/layer_dock.hpp
+        include/glyma/app/main_window.hpp
+        include/glyma/app/qt_image.hpp
+        src/app/app_controller.cpp
+        src/app/canvas_view.cpp
+        src/app/layer_dock.cpp
+        src/app/main_window.cpp
+        src/app/qt_image.cpp
+    )
+
+    set_target_properties(glyma_app_ui PROPERTIES AUTOMOC ON)
+    target_link_libraries(glyma_app_ui PUBLIC glyma_core Qt6::Widgets)
+    target_compile_options(glyma_app_ui PRIVATE -Wall -Wextra -Wpedantic)
+
+    add_executable(glyma
+        src/app/main.cpp
+    )
+    target_link_libraries(glyma PRIVATE glyma_app_ui)
+    target_compile_options(glyma PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 if(BUILD_TESTING)
     add_executable(glyma_tests
@@ -148,4 +180,20 @@ if(BUILD_TESTING)
         NAME glyma_project_tests
         COMMAND glyma_project_tests
     )
+
+    if(GLYMA_BUILD_APP)
+        add_executable(glyma_ui_tests
+            tests/ui_tests.cpp
+        )
+        target_link_libraries(glyma_ui_tests PRIVATE glyma_app_ui)
+        target_compile_options(glyma_ui_tests PRIVATE -Wall -Wextra -Wpedantic)
+
+        add_test(
+            NAME glyma_ui_tests
+            COMMAND glyma_ui_tests
+        )
+        set_tests_properties(glyma_ui_tests PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        )
+    endif()
 endif()

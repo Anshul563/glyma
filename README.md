@@ -6,8 +6,13 @@ Open-source, native image editor built from scratch using C++20 on Ubuntu Linux.
 
 ```bash
 sudo apt install build-essential cmake ninja-build pkg-config \
-    libpng-dev libzip-dev nlohmann-json3-dev
+    libpng-dev libzip-dev nlohmann-json3-dev qt6-base-dev
 ```
+
+The desktop application is tested with Qt 6.10.2 Widgets. A local development
+install at `~/.local/qt6/usr` is detected automatically. For other non-standard
+prefixes, configure with `-DCMAKE_PREFIX_PATH=<prefix>` (the same flag can point
+at locally built libzip/nlohmann/json installations).
 
 If the distribution packages for libzip or nlohmann/json are unavailable, they can
 be built/installed into `~/.local` (CMake searches `$ENV{HOME}/.local` as a hint):
@@ -35,6 +40,41 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+Launch the desktop application:
+
+```bash
+./build/glyma
+```
+
+The engine and tests can be built without Qt:
+
+```bash
+cmake -S . -B build-core -G Ninja -DGLYMA_BUILD_APP=OFF
+cmake --build build-core
+ctest --test-dir build-core --output-on-failure
+```
+
+## Desktop Application
+
+The Qt 6 Widgets shell lives under `include/glyma/app` and `src/app`. The engine
+remains Qt-independent; the application layer owns the active `Document`, its
+`CommandHistory`, and all UI state.
+
+- Native main window with File, Edit, View, and Help menus, a toolbar, a status
+  bar, and a dockable Layers panel.
+- Checkerboard-backed canvas with centered display, mouse-wheel and menu zoom,
+  fit-to-window, zoom reset, and drag panning.
+- Layers panel with stack order, selection, visibility toggles, and opacity.
+- New documents, opening `.glyma` projects or importing PNG files, saving
+  projects, and exporting rendered PNGs through native file dialogs.
+- Undo/redo for visibility and opacity changes through the engine command
+  history.
+- Dark neutral Qt stylesheet with a neutral workspace around the canvas.
+
+File and Edit actions use the existing engine serialization, PNG, and
+command-history APIs. Rendering is performed by `Document::render()`; the canvas
+receives an independent `QImage` copy.
 
 ## PNG Import/Export
 
@@ -124,7 +164,9 @@ Undo/redo history is session-only and is not serialized.
 ## Known limitations
 
 - No JPEG/WebP/SVG/PSD support.
-- No GUI/file dialogs.
+- No painting tools, brush strokes, selections, transformations, or GPU rendering.
+- No layer creation, deletion, reordering, renaming, or blending modes in the UI.
+- Undo/redo in the UI currently covers layer visibility and opacity changes.
 - No undo/redo memory budgeting beyond count limits.
 - No color profile/ICC or wide-gamut management.
 - No autosave, recovery snapshots, encryption, or format migration yet.
