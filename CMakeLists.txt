@@ -18,6 +18,8 @@ add_library(glyma_core STATIC
     src/engine/layer.cpp
     src/engine/layer_stack.cpp
     src/engine/document.cpp
+    src/engine/command_history.cpp
+    src/engine/commands.cpp
 )
 
 target_include_directories(glyma_core
@@ -50,13 +52,19 @@ if(BUILD_TESTING)
         tests/document_tests.cpp
     )
 
+    add_executable(glyma_history_tests
+        tests/command_history_tests.cpp
+    )
+
     target_link_libraries(glyma_tests PRIVATE glyma_core)
     target_link_libraries(glyma_layer_tests PRIVATE glyma_core)
     target_link_libraries(glyma_document_tests PRIVATE glyma_core)
+    target_link_libraries(glyma_history_tests PRIVATE glyma_core)
 
     target_compile_options(glyma_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_layer_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_document_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(glyma_history_tests PRIVATE -Wall -Wextra -Wpedantic)
 
     add_test(
         NAME glyma_image_buffer_tests
@@ -71,5 +79,10 @@ if(BUILD_TESTING)
     add_test(
         NAME glyma_document_tests
         COMMAND glyma_document_tests
+    )
+
+    add_test(
+        NAME glyma_history_tests
+        COMMAND glyma_history_tests
     )
 endif()
