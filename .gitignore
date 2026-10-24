@@ -1,0 +1,66 @@
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+DartConfiguration.tcl
+compile_commands.json
+build/
+out/
+cmake-build-*/
+
+# Ninja
+build.ninja
+rules.ninja
+
+# Compiled binaries/libraries/objects
+*.o
+*.obj
+*.so
+*.so.*
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.out
+!*.a.in
+!*.lib.in
+
+# Testing
+Testing/
+*.gcda
+*.gcno
+*.gcov
+
+# IDE/Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Debug/Logs/Temp
+*.log
+*.dSYM/
+core
+core.*
+*.stackdump
+*.pid
+*.seed
+*.bak
+tmp/
+temp/
+
+# Local env/secrets
+.env
+.env.*
+*.pem
+*.key
+secrets/
