@@ -1,3 +1,0 @@
-glyma_image_buffer_tests 5 0.000644338
-glyma_layer_tests 1 0.00374175
----
