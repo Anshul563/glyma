@@ -40,6 +40,7 @@ add_library(glyma_core STATIC
     src/engine/document.cpp
     src/engine/command_history.cpp
     src/engine/commands.cpp
+    src/engine/brush_engine.cpp
     src/io/png_reader.cpp
     src/io/png_writer.cpp
     src/io/document_io.cpp
@@ -146,12 +147,17 @@ if(BUILD_TESTING)
         tests/project_format_tests.cpp
     )
 
+    add_executable(glyma_brush_tests
+        tests/brush_tests.cpp
+    )
+
     target_link_libraries(glyma_tests PRIVATE glyma_core)
     target_link_libraries(glyma_layer_tests PRIVATE glyma_core)
     target_link_libraries(glyma_document_tests PRIVATE glyma_core)
     target_link_libraries(glyma_history_tests PRIVATE glyma_core)
     target_link_libraries(glyma_png_tests PRIVATE glyma_core)
     target_link_libraries(glyma_project_tests PRIVATE glyma_core)
+    target_link_libraries(glyma_brush_tests PRIVATE glyma_core)
 
     target_compile_options(glyma_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_layer_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -159,6 +165,7 @@ if(BUILD_TESTING)
     target_compile_options(glyma_history_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_png_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_project_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(glyma_brush_tests PRIVATE -Wall -Wextra -Wpedantic)
 
     add_test(
         NAME glyma_image_buffer_tests
@@ -193,6 +200,11 @@ if(BUILD_TESTING)
     add_test(
         NAME glyma_project_tests
         COMMAND glyma_project_tests
+    )
+
+    add_test(
+        NAME glyma_brush_tests
+        COMMAND glyma_brush_tests
     )
 
     if(GLYMA_BUILD_APP)

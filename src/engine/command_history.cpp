@@ -30,6 +30,20 @@ bool CommandHistory::execute(CommandPtr command, Document& document) {
     return true;
 }
 
+bool CommandHistory::pushExecuted(CommandPtr command) {
+    if (!command) {
+        return false;
+    }
+
+    redoStack_.clear();
+    const std::uint64_t before = currentRevision_;
+    const std::uint64_t after = ++nextRevision_;
+    undoStack_.push_back(Entry{std::move(command), before, after});
+    currentRevision_ = after;
+    trim();
+    return true;
+}
+
 bool CommandHistory::undo(Document& document) {
     if (undoStack_.empty()) {
         return false;

@@ -6,6 +6,8 @@
 #include <QObject>
 #include <QString>
 
+#include "glyma/core/brush.hpp"
+#include "glyma/core/brush_engine.hpp"
 #include "glyma/core/command_history.hpp"
 #include "glyma/core/document.hpp"
 #include "glyma/core/image_buffer.hpp"
@@ -29,6 +31,19 @@ public:
     [[nodiscard]] bool canUndo() const noexcept;
     [[nodiscard]] bool canRedo() const noexcept;
     [[nodiscard]] bool isModified() const noexcept;
+
+    [[nodiscard]] const core::BrushSettings& brushSettings() const noexcept;
+    bool setBrushSettings(const core::BrushSettings& settings);
+    [[nodiscard]] core::BrushMode brushMode() const noexcept;
+    void setBrushMode(core::BrushMode mode);
+
+    // Drawing API. Positions are document-space coordinates; the controller
+    // maps them into the selected layer and rejects hidden/missing layers.
+    bool beginBrushStroke(double documentX, double documentY);
+    bool updateBrushStroke(double documentX, double documentY);
+    bool endBrushStroke();
+    bool cancelBrushStroke();
+    [[nodiscard]] bool isBrushStrokeActive() const noexcept;
 
     bool newDocument(
         const QString& name,
@@ -74,6 +89,11 @@ private:
     [[nodiscard]] std::string nextLayerName() const;
 
     std::unique_ptr<core::Document> document_;
+    std::unique_ptr<core::BrushStroke> brushStroke_;
+    core::BrushSettings brushSettings_;
+    core::BrushMode brushMode_{core::BrushMode::Paint};
+    double strokeOffsetX_{0.0};
+    double strokeOffsetY_{0.0};
     core::CommandHistory history_;
     core::LayerId selectedLayerId_{core::Layer::invalidId};
     QString filePath_;

@@ -27,8 +27,11 @@ using glyma::app::AppController;
 using glyma::app::CanvasView;
 using glyma::app::MainWindow;
 using glyma::app::toQImage;
+using glyma::core::BrushMode;
+using glyma::core::BrushSettings;
 using glyma::core::Document;
 using glyma::core::ImageBuffer;
+using glyma::core::Layer;
 using glyma::core::LayerId;
 using glyma::core::Pixel;
 
@@ -332,6 +335,135 @@ void testControllerFailurePaths() {
     assert(errors == 2);
 }
 
+void testBrushToolControls() {
+    MainWindow window;
+    auto* brush = window.findChild<QAction*>(QStringLiteral("actionToolBrush"));
+    auto* eraser = window.findChild<QAction*>(QStringLiteral("actionToolEraser"));
+    auto* color = window.findChild<QToolButton*>(QStringLiteral("toolColorButton"));
+    auto* size = window.findChild<QSpinBox*>(QStringLiteral("brushSizeSpin"));
+    auto* opacity = window.findChild<QSpinBox*>(QStringLiteral("brushOpacitySpin"));
+    auto* hardness = window.findChild<QSpinBox*>(QStringLiteral("brushHardnessSpin"));
+    assert(brush != nullptr);
+    assert(eraser != nullptr);
+    assert(color != nullptr);
+    assert(size != nullptr);
+    assert(opacity != nullptr);
+    assert(hardness != nullptr);
+
+    assert(brush->isCheckable());
+    assert(brush->isChecked());
+    assert(!eraser->isChecked());
+    assert(size->value() == 20);
+    assert(opacity->value() == 100);
+    assert(hardness->value() == 100);
+
+    const BrushSettings defaults = window.controller().brushSettings();
+    assert(std::abs(defaults.diameter - 20.0) < 1e-9);
+    assert(std::abs(defaults.opacity - 1.0F) < 1e-6F);
+    assert(std::abs(defaults.hardness - 1.0F) < 1e-6F);
+    assert(defaults.color == (Pixel{0, 0, 0, 255}));
+    assert(window.controller().brushMode() == BrushMode::Paint);
+
+    eraser->trigger();
+    QCoreApplication::processEvents();
+    assert(eraser->isChecked());
+    assert(!brush->isChecked());
+    assert(window.controller().brushMode() == BrushMode::Erase);
+
+    brush->trigger();
+    QCoreApplication::processEvents();
+    assert(brush->isChecked());
+    assert(window.controller().brushMode() == BrushMode::Paint);
+
+    size->setValue(7);
+    opacity->setValue(40);
+    hardness->setValue(25);
+    QCoreApplication::processEvents();
+    const BrushSettings updated = window.controller().brushSettings();
+    assert(std::abs(updated.diameter - 7.0) < 1e-9);
+    assert(std::abs(updated.opacity - 0.4F) < 1e-6F);
+    assert(std::abs(updated.hardness - 0.25F) < 1e-6F);
+}
+
+void testControllerBrushIntegration() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Brush"), 8, 8));
+    const LayerId firstId = controller.selectedLayerId();
+    Layer* first = controller.document().findLayer(firstId);
+    assert(first != nullptr);
+    const ImageBuffer firstBefore = first->buffer();
+
+    BrushSettings settings;
+    settings.diameter = 2.0;
+    settings.color = Pixel{255, 0, 0, 255};
+    settings.opacity = 1.0F;
+    settings.hardness = 1.0F;
+    assert(controller.setBrushSettings(settings));
+    controller.setBrushMode(BrushMode::Paint);
+
+    assert(controller.beginBrushStroke(2.5, 2.5));
+    assert(controller.isBrushStrokeActive());
+    assert(controller.updateBrushStroke(5.5, 2.5));
+    assert(controller.endBrushStroke());
+    assert(!controller.isBrushStrokeActive());
+    assert(controller.canUndo());
+    assert(controller.isModified());
+    assert(first->buffer().getPixel(2, 2) == (Pixel{255, 0, 0, 255}));
+    assert(first->buffer().getPixel(5, 2).a != 0);
+    const ImageBuffer firstPainted = first->buffer();
+
+    assert(controller.undo());
+    assert(first->buffer().pixels() == firstBefore.pixels());
+    assert(controller.redo());
+    assert(first->buffer().pixels() == firstPainted.pixels());
+
+    const ImageBuffer firstCommitted = first->buffer();
+    assert(controller.beginBrushStroke(1.5, 6.5));
+    assert(controller.updateBrushStroke(6.5, 6.5));
+    assert(controller.cancelBrushStroke());
+    assert(first->buffer().pixels() == firstCommitted.pixels());
+
+    controller.setLayerVisibility(firstId, false);
+    const ImageBuffer hidden = first->buffer();
+    assert(!controller.beginBrushStroke(3.5, 3.5));
+    assert(!controller.isBrushStrokeActive());
+    assert(first->buffer().pixels() == hidden.pixels());
+    controller.setLayerVisibility(firstId, true);
+
+    controller.addLayer();
+    const LayerId topId = controller.selectedLayerId();
+    assert(topId != firstId);
+    Layer* top = controller.document().findLayer(topId);
+    Layer* bottom = controller.document().findLayer(firstId);
+    assert(top != nullptr);
+    assert(bottom != nullptr);
+    const ImageBuffer bottomBefore = bottom->buffer();
+    const ImageBuffer topBefore = top->buffer();
+
+    assert(controller.beginBrushStroke(4.5, 4.5));
+    assert(controller.updateBrushStroke(5.5, 5.5));
+    assert(controller.endBrushStroke());
+    assert(bottom->buffer().pixels() == bottomBefore.pixels());
+    assert(top->buffer().pixels() != topBefore.pixels());
+}
+
+void testCanvasDocumentMapping() {
+    CanvasView view;
+    view.resize(400, 300);
+
+    QImage image(100, 80, QImage::Format_RGBA8888);
+    image.fill(Qt::transparent);
+    view.setImage(image);
+    view.setZoom(2.0);
+    view.centerOn(50.0, 40.0);
+
+    const QPointF scenePoint(20.5, 30.25);
+    const QPointF viewportPoint = view.viewportTransform().map(scenePoint);
+    const QPointF mapped = view.documentPosition(viewportPoint);
+    assert(std::abs(mapped.x() - scenePoint.x()) < 1e-6);
+    assert(std::abs(mapped.y() - scenePoint.y()) < 1e-6);
+}
+
 void testControllerFileOperations() {
     MainWindow window;
     QTemporaryDir directory;
@@ -390,6 +522,9 @@ int main(int argc, char* argv[]) {
     testNewDocumentOptions();
     testModifiedStateTracking();
     testLayerManagement();
+    testBrushToolControls();
+    testControllerBrushIntegration();
+    testCanvasDocumentMapping();
     testControllerFailurePaths();
     testControllerFileOperations();
 

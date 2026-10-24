@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QColor>
@@ -21,12 +22,15 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSize>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QStyle>
 #include <QToolBar>
+#include <QToolButton>
 
 #include "glyma/app/canvas_view.hpp"
 #include "glyma/app/layer_dock.hpp"
@@ -64,6 +68,7 @@ MainWindow::MainWindow(QWidget* parent)
     createMenus();
     createToolBar();
     createStatusBar();
+    createToolOptions();
     createDocks();
     connectSignals();
     applyStyle();
@@ -209,6 +214,101 @@ void MainWindow::createToolBar() {
     toolBar->addAction(fitAction_);
 }
 
+void MainWindow::createToolOptions() {
+    auto* toolBar = addToolBar(tr("Tools"));
+    toolBar->setObjectName(QStringLiteral("toolsToolBar"));
+    toolBar->setMovable(false);
+    toolBar->setIconSize(QSize(16, 16));
+    toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+
+    toolGroup_ = new QActionGroup(this);
+    toolGroup_->setExclusive(true);
+
+    brushToolAction_ = makeAction(
+        this, tr("&Brush"), QKeySequence(QStringLiteral("B")),
+        QStringLiteral("actionToolBrush")
+    );
+    brushToolAction_->setCheckable(true);
+    brushToolAction_->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));
+
+    eraserToolAction_ = makeAction(
+        this, tr("&Eraser"), QKeySequence(QStringLiteral("E")),
+        QStringLiteral("actionToolEraser")
+    );
+    eraserToolAction_->setCheckable(true);
+    eraserToolAction_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+
+    toolGroup_->addAction(brushToolAction_);
+    toolGroup_->addAction(eraserToolAction_);
+    toolBar->addAction(brushToolAction_);
+    toolBar->addAction(eraserToolAction_);
+    toolBar->addSeparator();
+
+    colorButton_ = new QToolButton(toolBar);
+    colorButton_->setObjectName(QStringLiteral("toolColorButton"));
+    colorButton_->setAutoRaise(true);
+    colorButton_->setToolTip(tr("Foreground color"));
+    colorButton_->setIconSize(QSize(18, 18));
+    toolBar->addWidget(new QLabel(tr("Color"), toolBar));
+    toolBar->addWidget(colorButton_);
+    toolBar->addSeparator();
+
+    const auto addSpin = [this, toolBar](
+                             const QString& label,
+                             const QString& objectName,
+                             int minimum,
+                             int maximum,
+                             int value,
+                             const QString& suffix
+                         ) {
+        auto* spin = new QSpinBox(toolBar);
+        spin->setObjectName(objectName);
+        spin->setRange(minimum, maximum);
+        spin->setValue(value);
+        spin->setSuffix(suffix);
+        spin->setFixedWidth(72);
+        spin->setKeyboardTracking(false);
+        toolBar->addWidget(new QLabel(label, toolBar));
+        toolBar->addWidget(spin);
+        connect(spin, &QSpinBox::valueChanged, this, [this] {
+            applyBrushSettings();
+        });
+        return spin;
+    };
+
+    brushSizeSpin_ = addSpin(
+        tr("Size"), QStringLiteral("brushSizeSpin"),
+        1, static_cast<int>(core::BrushSettings::maxDiameter), 20,
+        QStringLiteral(" px")
+    );
+    brushOpacitySpin_ = addSpin(
+        tr("Opacity"), QStringLiteral("brushOpacitySpin"),
+        0, 100, 100, QStringLiteral("%")
+    );
+    brushHardnessSpin_ = addSpin(
+        tr("Hardness"), QStringLiteral("brushHardnessSpin"),
+        0, 100, 100, QStringLiteral("%")
+    );
+
+    connect(brushToolAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            controller_.setBrushMode(core::BrushMode::Paint);
+        }
+    });
+    connect(eraserToolAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            controller_.setBrushMode(core::BrushMode::Erase);
+        }
+    });
+    connect(colorButton_, &QToolButton::clicked, this, [this] {
+        chooseBrushColor();
+    });
+
+    brushToolAction_->setChecked(true);
+    updateColorButton();
+    applyBrushSettings();
+}
+
 void MainWindow::createStatusBar() {
     statusInfo_ = new QLabel(this);
     statusInfo_->setObjectName(QStringLiteral("statusInfo"));
@@ -230,6 +330,19 @@ void MainWindow::createDocks() {
 }
 
 void MainWindow::connectSignals() {
+    connect(canvas_, &CanvasView::strokeStarted, this, [this](const QPointF& position) {
+        controller_.beginBrushStroke(position.x(), position.y());
+    });
+    connect(canvas_, &CanvasView::strokeMoved, this, [this](const QPointF& position) {
+        controller_.updateBrushStroke(position.x(), position.y());
+    });
+    connect(canvas_, &CanvasView::strokeEnded, this, [this] {
+        controller_.endBrushStroke();
+    });
+    connect(canvas_, &CanvasView::strokeCancelled, this, [this] {
+        controller_.cancelBrushStroke();
+    });
+
     connect(&controller_, &AppController::documentChanged, this, [this] {
         refreshCanvas();
         refreshStatus();
@@ -363,6 +476,11 @@ void MainWindow::applyStyle() {
         QToolButton:disabled {
             color: #707076;
         }
+        QToolButton:checked {
+            background-color: #3c6da6;
+            border-color: #4b82c4;
+            color: #ffffff;
+        }
         QDockWidget {
             color: #e4e4e6;
             titlebar-close-icon: none;
@@ -494,7 +612,48 @@ void MainWindow::updateTitle() {
     setWindowModified(controller_.isModified());
 }
 
+void MainWindow::applyBrushSettings() {
+    core::BrushSettings settings;
+    settings.diameter = static_cast<double>(brushSizeSpin_->value());
+    settings.color = core::Pixel{
+        static_cast<std::uint8_t>(brushColor_.red()),
+        static_cast<std::uint8_t>(brushColor_.green()),
+        static_cast<std::uint8_t>(brushColor_.blue()),
+        static_cast<std::uint8_t>(brushColor_.alpha())
+    };
+    settings.opacity =
+        static_cast<float>(brushOpacitySpin_->value()) / 100.0F;
+    settings.hardness =
+        static_cast<float>(brushHardnessSpin_->value()) / 100.0F;
+    controller_.setBrushSettings(settings);
+}
+
+void MainWindow::updateColorButton() {
+    QPixmap swatch(18, 18);
+    swatch.fill(Qt::transparent);
+    QPainter painter(&swatch);
+    painter.setPen(QColor(20, 20, 22));
+    painter.setBrush(brushColor_);
+    painter.drawRect(1, 1, 15, 15);
+    painter.end();
+    colorButton_->setIcon(QIcon(swatch));
+}
+
+void MainWindow::chooseBrushColor() {
+    const QColor chosen = QColorDialog::getColor(
+        brushColor_, this, tr("Brush Color"),
+        QColorDialog::ShowAlphaChannel
+    );
+    if (!chosen.isValid()) {
+        return;
+    }
+    brushColor_ = chosen;
+    updateColorButton();
+    applyBrushSettings();
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
+    controller_.endBrushStroke();
     if (!prepareForDestructiveAction()) {
         event->ignore();
         return;

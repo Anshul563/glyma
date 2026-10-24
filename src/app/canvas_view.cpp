@@ -7,10 +7,14 @@
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QImage>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QResizeEvent>
+#include <QScrollBar>
 #include <QShowEvent>
+#include <QTransform>
 #include <QWheelEvent>
 
 namespace glyma::app {
@@ -66,7 +70,9 @@ CanvasView::CanvasView(QWidget* parent)
     setFrameShape(QFrame::NoFrame);
     setBackgroundBrush(QColor(24, 24, 26));
     setAlignment(Qt::AlignCenter);
-    setDragMode(QGraphicsView::ScrollHandDrag);
+    setDragMode(QGraphicsView::NoDrag);
+    setCursor(Qt::CrossCursor);
+    setFocusPolicy(Qt::StrongFocus);
     setTransformationAnchor(QGraphicsView::AnchorViewCenter);
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
     setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -211,6 +217,98 @@ void CanvasView::showEvent(QShowEvent* event) {
         applyZoom(fitZoom(imageSize_, viewport()->size()), true);
         centerOn(scene_->sceneRect().center());
     }
+}
+
+QPointF CanvasView::documentPosition(const QPointF& viewportPosition) const {
+    bool invertible = false;
+    const QTransform inverse = viewportTransform().inverted(&invertible);
+    if (!invertible) {
+        return {};
+    }
+    return inverse.map(viewportPosition);
+}
+
+void CanvasView::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        if (imageSize_.isEmpty()) {
+            event->ignore();
+            return;
+        }
+        setFocus(Qt::MouseFocusReason);
+        drawing_ = true;
+        emit strokeStarted(documentPosition(event->position()));
+        event->accept();
+        return;
+    }
+
+    if (event->button() == Qt::MiddleButton) {
+        panning_ = true;
+        lastPanPoint_ = event->position().toPoint();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+
+    if (event->button() == Qt::RightButton && drawing_) {
+        drawing_ = false;
+        emit strokeCancelled();
+        event->accept();
+        return;
+    }
+
+    QGraphicsView::mousePressEvent(event);
+}
+
+void CanvasView::mouseMoveEvent(QMouseEvent* event) {
+    if (panning_) {
+        const QPoint current = event->position().toPoint();
+        const QPoint delta = current - lastPanPoint_;
+        lastPanPoint_ = current;
+        horizontalScrollBar()->setValue(
+            horizontalScrollBar()->value() - delta.x()
+        );
+        verticalScrollBar()->setValue(
+            verticalScrollBar()->value() - delta.y()
+        );
+        event->accept();
+        return;
+    }
+
+    if (drawing_) {
+        emit strokeMoved(documentPosition(event->position()));
+        event->accept();
+        return;
+    }
+
+    QGraphicsView::mouseMoveEvent(event);
+}
+
+void CanvasView::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && drawing_) {
+        drawing_ = false;
+        emit strokeEnded();
+        event->accept();
+        return;
+    }
+
+    if (event->button() == Qt::MiddleButton && panning_) {
+        panning_ = false;
+        setCursor(Qt::CrossCursor);
+        event->accept();
+        return;
+    }
+
+    QGraphicsView::mouseReleaseEvent(event);
+}
+
+void CanvasView::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape && drawing_) {
+        drawing_ = false;
+        emit strokeCancelled();
+        event->accept();
+        return;
+    }
+    QGraphicsView::keyPressEvent(event);
 }
 
 void CanvasView::wheelEvent(QWheelEvent* event) {

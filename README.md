@@ -64,7 +64,7 @@ remains Qt-independent; the application layer owns the active `Document`, its
 - Native main window with File, Edit, View, and Help menus, a toolbar, a status
   bar, and a dockable Layers panel.
 - Checkerboard-backed canvas with centered display, mouse-wheel and menu zoom,
-  fit-to-window, zoom reset, and drag panning.
+  fit-to-window, zoom reset, and middle-button drag panning.
 - Layers panel with stack order, selection, visibility toggles, opacity, and
   add/delete/rename/reorder controls. Rename with double-click or F2.
 - New documents with a transparent or solid background color, opening `.glyma`
@@ -72,13 +72,40 @@ remains Qt-independent; the application layer owns the active `Document`, its
   rendered PNGs through native file dialogs.
 - Unsaved-changes guard before New, Open, and window close with Save, Discard,
   and Cancel choices; modified documents show a `*` in the title bar.
-- Undo/redo for layer add/remove/reorder/rename, visibility, and opacity
-  changes through the engine command history.
+- Brush and eraser tools with foreground color, size, opacity, and hardness
+  controls in a dedicated tool options bar.
+- Undo/redo for brush/eraser strokes and layer add/remove/reorder/rename,
+  visibility, and opacity changes through the engine command history.
 - Dark neutral Qt stylesheet with a neutral workspace around the canvas.
 
 File and Edit actions use the existing engine serialization, PNG, and
 command-history APIs. Rendering is performed by `Document::render()`; the canvas
 receives an independent `QImage` copy.
+
+## Painting Tools
+
+The CPU brush engine lives in `include/glyma/core/brush.hpp`,
+`include/glyma/core/brush_engine.hpp`, and `src/engine/brush_engine.cpp`. It has
+no Qt dependencies; the canvas only supplies document-space pointer positions.
+
+- `Brush` (`B`) paints with the foreground color and `Eraser` (`E`) reduces
+  alpha on the selected layer. The active tool is highlighted in the tool bar.
+- Brush settings: diameter 1-10000 px, foreground RGBA color, opacity 0-100%,
+  and hardness 0-100%. The default is a 20 px, fully opaque, hard round brush.
+- Dabs are interpolated between pointer samples, including subpixel positions,
+  so fast movements do not leave gaps. The affected region is clipped to the
+  active layer's buffer.
+- Coverage uses a one-pixel linear antialiased edge: full coverage inside
+  `radius * hardness - 0.5`, zero coverage beyond `radius + 0.5`, and linear
+  interpolation between. A stroke keeps the maximum coverage per pixel, so
+  overlapping dabs do not build up beyond the selected opacity.
+- Painting uses straight-alpha source-over blending. Erasing preserves RGB for
+  partial erasure and writes `{0, 0, 0, 0}` for fully erased pixels.
+- A complete stroke is one command-history entry. The command stores only the
+  sparse set of changed pixels with their before/after values, so undo and redo
+  are exact without full-document snapshots.
+- Left-button drag draws. Middle-button drag pans. Escape or a right-button
+  press cancels the in-progress stroke.
 
 ## PNG Import/Export
 
@@ -168,9 +195,11 @@ Undo/redo history is session-only and is not serialized.
 ## Known limitations
 
 - No JPEG/WebP/SVG/PSD support.
-- No painting tools, brush strokes, selections, transformations, or GPU rendering.
-- No layer duplication, merging, grouping, blend modes, or drag-and-drop
-  reordering (the layer toolbar provides add/delete/rename/move controls).
+- No selections, transformations, or GPU rendering.
+- No textured brushes, pressure sensitivity, brush dynamics, or advanced brush
+  presets.
+- No layer blending modes, duplication, merging, grouping, or drag-and-drop
+  reordering.
 - No undo/redo memory budgeting beyond count limits.
 - No color profile/ICC or wide-gamut management.
 - No autosave, recovery snapshots, encryption, or format migration yet.

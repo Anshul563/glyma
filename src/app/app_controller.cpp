@@ -62,11 +62,120 @@ bool AppController::isModified() const noexcept {
     return unsavedContent_ || history_.currentRevision() != savedRevision_;
 }
 
+const core::BrushSettings& AppController::brushSettings() const noexcept {
+    return brushSettings_;
+}
+
+bool AppController::setBrushSettings(const core::BrushSettings& settings) {
+    if (!settings.isValid()) {
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    brushSettings_ = settings;
+    return true;
+}
+
+core::BrushMode AppController::brushMode() const noexcept {
+    return brushMode_;
+}
+
+void AppController::setBrushMode(core::BrushMode mode) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    brushMode_ = mode;
+}
+
+bool AppController::beginBrushStroke(double documentX, double documentY) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+
+    core::Layer* layer = document_->findLayer(selectedLayerId_);
+    if (layer == nullptr || !layer->visible()) {
+        return false;
+    }
+
+    try {
+        auto stroke = std::make_unique<core::BrushStroke>(
+            layer->buffer(), layer->id(), brushSettings_, brushMode_
+        );
+        strokeOffsetX_ = static_cast<double>(layer->x());
+        strokeOffsetY_ = static_cast<double>(layer->y());
+        const bool changed = stroke->start(
+            documentX - strokeOffsetX_,
+            documentY - strokeOffsetY_
+        );
+        brushStroke_ = std::move(stroke);
+        if (changed) {
+            emit documentChanged();
+        }
+        return true;
+    } catch (const std::exception&) {
+        brushStroke_.reset();
+        return false;
+    }
+}
+
+bool AppController::updateBrushStroke(double documentX, double documentY) {
+    if (!brushStroke_) {
+        return false;
+    }
+    const bool changed = brushStroke_->lineTo(
+        documentX - strokeOffsetX_,
+        documentY - strokeOffsetY_
+    );
+    if (changed) {
+        emit documentChanged();
+    }
+    return changed;
+}
+
+bool AppController::endBrushStroke() {
+    if (!brushStroke_) {
+        return false;
+    }
+
+    auto command = brushStroke_->finish();
+    brushStroke_.reset();
+    if (!command) {
+        return false;
+    }
+
+    const bool recorded = history_.pushExecuted(std::move(command));
+    if (recorded) {
+        emitDocumentState(false);
+    }
+    return recorded;
+}
+
+bool AppController::cancelBrushStroke() {
+    if (!brushStroke_) {
+        return false;
+    }
+
+    const bool restored = brushStroke_->cancel();
+    brushStroke_.reset();
+    if (restored) {
+        emit documentChanged();
+    }
+    return restored;
+}
+
+bool AppController::isBrushStrokeActive() const noexcept {
+    return brushStroke_ != nullptr;
+}
+
 void AppController::installDocument(
     std::unique_ptr<core::Document> document,
     const QString& path,
     bool modifiedOnLoad
 ) {
+    if (brushStroke_) {
+        (void)cancelBrushStroke();
+    }
     document_ = std::move(document);
     filePath_ = path;
     history_.clear();
@@ -127,6 +236,10 @@ bool AppController::newDocument(
     bool solidBackground,
     core::Pixel backgroundColor
 ) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+
     const std::uint64_t pixels =
         static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
     if (width == 0 || height == 0 || pixels > core::Document::maxPixelCount) {
@@ -157,6 +270,10 @@ bool AppController::newDocument(
 }
 
 bool AppController::openFile(const QString& path) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+
     const QFileInfo info(path);
     if (!info.exists() || !info.isFile()) {
         emit errorOccurred(tr("File does not exist: %1").arg(info.filePath()));
@@ -212,6 +329,9 @@ bool AppController::openFile(const QString& path) {
 }
 
 bool AppController::save(const QString& path) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     if (path.isEmpty()) {
         emit errorOccurred(tr("No save path was provided."));
         return false;
@@ -232,6 +352,9 @@ bool AppController::save(const QString& path) {
 }
 
 bool AppController::exportPng(const QString& path) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     if (path.isEmpty()) {
         emit errorOccurred(tr("No export path was provided."));
         return false;
@@ -247,6 +370,9 @@ bool AppController::exportPng(const QString& path) {
 }
 
 bool AppController::undo() {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     if (!history_.undo(*document_)) {
         return false;
     }
@@ -256,6 +382,9 @@ bool AppController::undo() {
 }
 
 bool AppController::redo() {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     if (!history_.redo(*document_)) {
         return false;
     }
@@ -268,11 +397,17 @@ void AppController::selectLayer(core::LayerId id) {
     if (document_->findLayer(id) == nullptr || selectedLayerId_ == id) {
         return;
     }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     selectedLayerId_ = id;
     emit selectionChanged(static_cast<quint64>(selectedLayerId_));
 }
 
 void AppController::addLayer() {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     auto command = std::make_unique<core::AddLayerCommand>(
         nextLayerName(), document_->width(), document_->height()
     );
@@ -287,6 +422,9 @@ void AppController::removeLayer(core::LayerId id) {
     if (document_->findLayer(id) == nullptr) {
         return;
     }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     auto command = std::make_unique<core::RemoveLayerCommand>(id);
     if (!history_.execute(std::move(command), *document_)) {
         return;
@@ -296,6 +434,9 @@ void AppController::removeLayer(core::LayerId id) {
 }
 
 void AppController::renameLayer(core::LayerId id, const QString& name) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     core::Layer* layer = document_->findLayer(id);
     if (layer == nullptr) {
         return;
@@ -325,6 +466,9 @@ void AppController::renameLayer(core::LayerId id, const QString& name) {
 }
 
 void AppController::moveLayerUp(core::LayerId id) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     const auto& layers = document_->layerStack().layers();
     for (std::size_t index = 0; index < layers.size(); ++index) {
         if (layers[index].id() != id) {
@@ -342,6 +486,9 @@ void AppController::moveLayerUp(core::LayerId id) {
 }
 
 void AppController::moveLayerDown(core::LayerId id) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     const auto& layers = document_->layerStack().layers();
     for (std::size_t index = 0; index < layers.size(); ++index) {
         if (layers[index].id() != id) {
@@ -359,6 +506,9 @@ void AppController::moveLayerDown(core::LayerId id) {
 }
 
 void AppController::setLayerVisibility(core::LayerId id, bool visible) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     core::Layer* layer = document_->findLayer(id);
     if (layer == nullptr || layer->visible() == visible) {
         return;
@@ -379,6 +529,9 @@ void AppController::setLayerVisibility(core::LayerId id, bool visible) {
 }
 
 void AppController::setLayerOpacity(core::LayerId id, float opacity) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
     if (!std::isfinite(opacity)) {
         return;
     }

@@ -27,6 +27,11 @@ public:
     // stack if present.
     bool execute(CommandPtr command, Document& document);
 
+    // Record a command whose change has already been applied. This is used by
+    // progressive tools (such as a brush stroke) so the result is not applied
+    // twice. Discards the redo stack. Returns false for a null command.
+    bool pushExecuted(CommandPtr command);
+
     // Undo the most recent executed command.
     bool undo(Document& document);
 
