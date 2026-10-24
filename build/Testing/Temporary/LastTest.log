@@ -1,0 +1,35 @@
+Start testing: Oct 24 16:56 IST
+----------------------------------------------------------
+1/2 Testing: glyma_image_buffer_tests
+1/2 Test: glyma_image_buffer_tests
+Command: "/home/anshulll84/Projects/glyma/build/glyma_tests"
+Directory: /home/anshulll84/Projects/glyma/build
+"glyma_image_buffer_tests" start time: Oct 24 16:56 IST
+Output:
+----------------------------------------------------------
+All Glyma core tests passed!
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"glyma_image_buffer_tests" end time: Oct 24 16:56 IST
+"glyma_image_buffer_tests" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/2 Testing: glyma_layer_tests
+2/2 Test: glyma_layer_tests
+Command: "/home/anshulll84/Projects/glyma/build/glyma_layer_tests"
+Directory: /home/anshulll84/Projects/glyma/build
+"glyma_layer_tests" start time: Oct 24 16:56 IST
+Output:
+----------------------------------------------------------
+All Glyma layer tests passed!
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"glyma_layer_tests" end time: Oct 24 16:56 IST
+"glyma_layer_tests" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 24 16:56 IST
