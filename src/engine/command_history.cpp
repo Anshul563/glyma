@@ -22,7 +22,10 @@ bool CommandHistory::execute(CommandPtr command, Document& document) {
         return false;
     }
 
-    undoStack_.push_back(std::move(command));
+    const std::uint64_t before = currentRevision_;
+    const std::uint64_t after = ++nextRevision_;
+    undoStack_.push_back(Entry{std::move(command), before, after});
+    currentRevision_ = after;
     trim();
     return true;
 }
@@ -32,17 +35,18 @@ bool CommandHistory::undo(Document& document) {
         return false;
     }
 
-    auto cmd = std::move(undoStack_.back());
+    Entry entry = std::move(undoStack_.back());
     undoStack_.pop_back();
 
-    if (!cmd->undo(document)) {
+    if (!entry.command->undo(document)) {
         // On failure, do not restore to undo stack in a broken state - push back
         // but mark as failed path is exceptional; keep simple and consistent
-        undoStack_.push_back(std::move(cmd));
+        undoStack_.push_back(std::move(entry));
         return false;
     }
 
-    redoStack_.push_back(std::move(cmd));
+    currentRevision_ = entry.revisionBefore;
+    redoStack_.push_back(std::move(entry));
     return true;
 }
 
@@ -51,16 +55,17 @@ bool CommandHistory::redo(Document& document) {
         return false;
     }
 
-    auto cmd = std::move(redoStack_.back());
+    Entry entry = std::move(redoStack_.back());
     redoStack_.pop_back();
 
-    if (!cmd->execute(document)) {
+    if (!entry.command->execute(document)) {
         // Put it back if execution fails
-        redoStack_.push_back(std::move(cmd));
+        redoStack_.push_back(std::move(entry));
         return false;
     }
 
-    undoStack_.push_back(std::move(cmd));
+    currentRevision_ = entry.revisionAfter;
+    undoStack_.push_back(std::move(entry));
     trim();
     return true;
 }
@@ -85,9 +90,15 @@ std::size_t CommandHistory::maxHistory() const noexcept {
     return maxHistory_;
 }
 
+std::uint64_t CommandHistory::currentRevision() const noexcept {
+    return currentRevision_;
+}
+
 void CommandHistory::clear() noexcept {
     undoStack_.clear();
     redoStack_.clear();
+    currentRevision_ = 0;
+    nextRevision_ = 0;
 }
 
 void CommandHistory::setMaxHistory(std::size_t maxHistory) {

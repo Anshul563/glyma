@@ -11,6 +11,7 @@
 #include <QListWidget>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QToolButton>
 #include <QtGlobal>
 
 #include "glyma/app/canvas_view.hpp"
@@ -22,6 +23,7 @@
 
 namespace {
 
+using glyma::app::AppController;
 using glyma::app::CanvasView;
 using glyma::app::MainWindow;
 using glyma::app::toQImage;
@@ -186,6 +188,150 @@ void testMainWindowConstruction() {
     assert(std::abs(opacity->value() - 40) <= 1);
 }
 
+void testNewDocumentOptions() {
+    AppController controller;
+    int errors = 0;
+    QObject::connect(
+        &controller, &AppController::errorOccurred,
+        [&errors](const QString&) { ++errors; }
+    );
+
+    assert(controller.newDocument(
+        QStringLiteral("Solid"), 4, 3, true, Pixel{10, 20, 30, 40}
+    ));
+    const Document& document = controller.document();
+    assert(document.name() == "Solid");
+    assert(document.width() == 4);
+    assert(document.height() == 3);
+    assert(document.layerCount() == 1);
+    assert(document.hasSolidBackground());
+    assert(document.backgroundColor() == (Pixel{10, 20, 30, 40}));
+    assert(controller.render().getPixel(0, 0) == (Pixel{10, 20, 30, 40}));
+    assert(!controller.isModified());
+
+    assert(controller.newDocument(QStringLiteral("Clear"), 2, 2));
+    assert(!controller.document().hasSolidBackground());
+    assert(controller.document().backgroundColor() == (Pixel{0, 0, 0, 0}));
+
+    assert(!controller.newDocument(QStringLiteral("Invalid"), 0, 10));
+    assert(controller.document().name() == "Clear");
+    assert(errors == 1);
+}
+
+void testModifiedStateTracking() {
+    MainWindow window;
+    AppController& controller = window.controller();
+    assert(!controller.isModified());
+    assert(!window.isWindowModified());
+
+    controller.addLayer();
+    QCoreApplication::processEvents();
+    assert(controller.isModified());
+    assert(window.isWindowModified());
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("modified.glyma"));
+    assert(controller.save(path));
+    assert(!controller.isModified());
+    assert(!window.isWindowModified());
+
+    assert(controller.undo());
+    QCoreApplication::processEvents();
+    assert(controller.isModified());
+    assert(window.isWindowModified());
+
+    assert(controller.redo());
+    QCoreApplication::processEvents();
+    assert(!controller.isModified());
+    assert(!window.isWindowModified());
+}
+
+void testLayerManagement() {
+    MainWindow window;
+    AppController& controller = window.controller();
+    const Document& document = controller.document();
+    auto* layers = window.findChild<QListWidget*>(QStringLiteral("layersList"));
+    auto* add = window.findChild<QToolButton*>(QStringLiteral("layerAddButton"));
+    auto* remove = window.findChild<QToolButton*>(QStringLiteral("layerDeleteButton"));
+    auto* up = window.findChild<QToolButton*>(QStringLiteral("layerUpButton"));
+    auto* down = window.findChild<QToolButton*>(QStringLiteral("layerDownButton"));
+    assert(layers != nullptr);
+    assert(add != nullptr);
+    assert(remove != nullptr);
+    assert(up != nullptr);
+    assert(down != nullptr);
+
+    const LayerId first = document.layerStack().layers().front().id();
+    assert(document.layerCount() == 1);
+
+    add->click();
+    QCoreApplication::processEvents();
+    assert(document.layerCount() == 2);
+    const LayerId added = document.layerStack().layers().back().id();
+    assert(added != first);
+    assert(controller.selectedLayerId() == added);
+    assert(document.layerStack().layers().back().name() == "Layer 2");
+    assert(layers->item(0)->text() == QStringLiteral("Layer 2"));
+
+    layers->item(0)->setText(QStringLiteral("Sky"));
+    QCoreApplication::processEvents();
+    assert(document.layerStack().layers().back().name() == "Sky");
+
+    down->click();
+    QCoreApplication::processEvents();
+    assert(document.layerStack().layers().front().id() == added);
+    assert(document.layerStack().layers().front().name() == "Sky");
+
+    up->click();
+    QCoreApplication::processEvents();
+    assert(document.layerStack().layers().back().id() == added);
+
+    remove->click();
+    QCoreApplication::processEvents();
+    assert(document.layerCount() == 1);
+    assert(document.layerStack().layers().front().id() == first);
+    assert(controller.selectedLayerId() == first);
+
+    assert(controller.undo());
+    QCoreApplication::processEvents();
+    assert(document.layerCount() == 2);
+    assert(document.layerStack().layers().back().id() == added);
+    assert(document.layerStack().layers().back().name() == "Sky");
+
+    assert(controller.redo());
+    QCoreApplication::processEvents();
+    assert(document.layerCount() == 1);
+}
+
+void testControllerFailurePaths() {
+    AppController controller;
+    int errors = 0;
+    QObject::connect(
+        &controller, &AppController::errorOccurred,
+        [&errors](const QString&) { ++errors; }
+    );
+    QTemporaryDir directory;
+    assert(directory.isValid());
+
+    controller.addLayer();
+    const std::size_t layerCount = controller.document().layerCount();
+    const Document::Id documentId = controller.document().id();
+    assert(controller.isModified());
+
+    const QString missingSave =
+        directory.filePath(QStringLiteral("missing/sub/scene.glyma"));
+    assert(!controller.save(missingSave));
+    assert(controller.isModified());
+    assert(controller.filePath().isEmpty());
+
+    assert(!controller.openFile(directory.filePath(QStringLiteral("missing.glyma"))));
+    assert(controller.document().id() == documentId);
+    assert(controller.document().layerCount() == layerCount);
+    assert(controller.isModified());
+    assert(errors == 2);
+}
+
 void testControllerFileOperations() {
     MainWindow window;
     QTemporaryDir directory;
@@ -214,6 +360,13 @@ void testControllerFileOperations() {
     assert(window.controller().document().width() == 1280);
     assert(window.controller().document().height() == 720);
     assert(window.controller().document().layerCount() == 1);
+    // Imported pixels are not yet stored in a project file.
+    assert(window.controller().isModified());
+
+    const QString importedProject =
+        directory.filePath(QStringLiteral("imported.glyma"));
+    assert(window.controller().save(importedProject));
+    assert(!window.controller().isModified());
 }
 
 } // namespace
@@ -234,6 +387,10 @@ int main(int argc, char* argv[]) {
     testZoomLimits();
     testCanvasZoomAndFit();
     testMainWindowConstruction();
+    testNewDocumentOptions();
+    testModifiedStateTracking();
+    testLayerManagement();
+    testControllerFailurePaths();
     testControllerFileOperations();
 
     std::cout << "All Glyma UI tests passed\n";

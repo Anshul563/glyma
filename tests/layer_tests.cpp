@@ -187,6 +187,21 @@ int main() {
         assert(stack.moveLayerUp(idc) == false);   // already at top
         assert(stack.moveLayerUp(999999) == false);
         assert(stack.moveLayerDown(999999) == false);
+
+        // Explicit repositioning by bottom-to-top index
+        assert(stack.moveLayer(ida, 2) == true);
+        assert(stack.layers()[0].id() == idb);
+        assert(stack.layers()[1].id() == idc);
+        assert(stack.layers()[2].id() == ida);
+
+        assert(stack.moveLayer(ida, 0) == true);
+        assert(stack.layers()[0].id() == ida);
+        assert(stack.layers()[1].id() == idb);
+        assert(stack.layers()[2].id() == idc);
+
+        assert(stack.moveLayer(ida, 0) == false);   // unchanged position
+        assert(stack.moveLayer(ida, 3) == false);   // out of range
+        assert(stack.moveLayer(999999, 1) == false);
     }
 
     // Compositing with layers: transparent/opaque, opacity, offsets, clipping, invisible, empty stack

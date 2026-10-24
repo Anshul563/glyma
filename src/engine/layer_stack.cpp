@@ -98,6 +98,23 @@ bool LayerStack::moveLayerDown(LayerId id) noexcept {
     return true;
 }
 
+bool LayerStack::moveLayer(LayerId id, std::size_t newIndex) noexcept {
+    const auto index = indexOf(id);
+    if (index == static_cast<std::size_t>(-1) || newIndex >= layers_.size() ||
+        index == newIndex) {
+        return false;
+    }
+
+    const auto from = layers_.begin() + static_cast<std::ptrdiff_t>(index);
+    const auto to = layers_.begin() + static_cast<std::ptrdiff_t>(newIndex);
+    if (index < newIndex) {
+        std::rotate(from, from + 1, to + 1);
+    } else {
+        std::rotate(to, from, from + 1);
+    }
+    return true;
+}
+
 std::size_t LayerStack::size() const noexcept {
     return layers_.size();
 }

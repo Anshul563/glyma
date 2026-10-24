@@ -3,8 +3,10 @@
 #include <QMainWindow>
 
 #include "glyma/app/app_controller.hpp"
+#include "glyma/app/document_lifecycle.hpp"
 
 class QAction;
+class QCloseEvent;
 class QLabel;
 
 namespace glyma::app {
@@ -19,6 +21,9 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
     [[nodiscard]] AppController& controller() noexcept;
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void createActions();
@@ -40,6 +45,11 @@ private:
     void onSaveAs();
     void onExportPng();
     void onAbout();
+
+    [[nodiscard]] bool prepareForDestructiveAction();
+    [[nodiscard]] bool saveCurrentDocument();
+    [[nodiscard]] bool saveDocumentAs();
+    [[nodiscard]] UnsavedChoice promptUnsavedChanges();
 
     void showError(const QString& message);
 

@@ -12,6 +12,7 @@ using glyma::core::ChangeLayerPropertiesCommand;
 using glyma::core::CommandHistory;
 using glyma::core::Document;
 using glyma::core::Layer;
+using glyma::core::MoveLayerCommand;
 using glyma::core::Pixel;
 using glyma::core::RemoveLayerCommand;
 
@@ -148,6 +149,36 @@ int main() {
         layer = doc.findLayer(id);
         assert(layer->name() == "Renamed");
         assert(layer->visible() == false);
+    }
+
+    // Moving a layer is undoable at its original position
+    {
+        Document doc("Doc", 4, 4);
+        CommandHistory history;
+        history.execute(std::make_unique<AddLayerCommand>("A", 4, 4), doc);
+        history.execute(std::make_unique<AddLayerCommand>("B", 4, 4), doc);
+        history.execute(std::make_unique<AddLayerCommand>("C", 4, 4), doc);
+
+        const auto& before = doc.layerStack().layers();
+        const auto aId = before[0].id();
+        const auto bId = before[1].id();
+        const auto cId = before[2].id();
+
+        assert(history.execute(std::make_unique<MoveLayerCommand>(aId, 2), doc));
+        assert(doc.layerStack().layers()[0].id() == bId);
+        assert(doc.layerStack().layers()[1].id() == cId);
+        assert(doc.layerStack().layers()[2].id() == aId);
+
+        assert(history.undo(doc));
+        assert(doc.layerStack().layers()[0].id() == aId);
+        assert(doc.layerStack().layers()[1].id() == bId);
+        assert(doc.layerStack().layers()[2].id() == cId);
+
+        assert(history.redo(doc));
+        assert(doc.layerStack().layers()[2].id() == aId);
+
+        assert(!history.execute(std::make_unique<MoveLayerCommand>(aId, 9), doc));
+        assert(!history.execute(std::make_unique<MoveLayerCommand>(999999, 0), doc));
     }
 
     // Invalid layer IDs

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -39,15 +40,29 @@ public:
     [[nodiscard]] std::size_t redoCount() const noexcept;
     [[nodiscard]] std::size_t maxHistory() const noexcept;
 
+    // Monotonic token identifying the document state represented by the
+    // current position in the history. It is reset by clear(). Two states are
+    // equal only if they have the same revision, which lets callers detect
+    // whether undo/redo returned to a previously saved state.
+    [[nodiscard]] std::uint64_t currentRevision() const noexcept;
+
     void clear() noexcept;
     void setMaxHistory(std::size_t maxHistory);
 
 private:
+    struct Entry {
+        CommandPtr command;
+        std::uint64_t revisionBefore{0};
+        std::uint64_t revisionAfter{0};
+    };
+
     void trim();
 
-    std::vector<CommandPtr> undoStack_;
-    std::vector<CommandPtr> redoStack_;
+    std::vector<Entry> undoStack_;
+    std::vector<Entry> redoStack_;
     std::size_t maxHistory_;
+    std::uint64_t currentRevision_{0};
+    std::uint64_t nextRevision_{0};
 };
 
 } // namespace glyma::core

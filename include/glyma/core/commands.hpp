@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -47,6 +48,22 @@ private:
     std::int32_t capturedX_{0};
     std::int32_t capturedY_{0};
     std::size_t capturedIndex_{static_cast<std::size_t>(-1)};
+};
+
+// Move a layer to an explicit bottom-to-top stack index.
+class MoveLayerCommand : public Command {
+public:
+    MoveLayerCommand(LayerId id, std::size_t newIndex);
+
+    [[nodiscard]] std::string name() const override;
+    bool execute(Document& document) override;
+    bool undo(Document& document) override;
+
+private:
+    LayerId targetId_;
+    std::size_t newIndex_;
+    std::size_t oldIndex_{static_cast<std::size_t>(-1)};
+    bool captured_{false};
 };
 
 // Change arbitrary layer properties (store old values).

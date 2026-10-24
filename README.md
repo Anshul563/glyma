@@ -65,11 +65,15 @@ remains Qt-independent; the application layer owns the active `Document`, its
   bar, and a dockable Layers panel.
 - Checkerboard-backed canvas with centered display, mouse-wheel and menu zoom,
   fit-to-window, zoom reset, and drag panning.
-- Layers panel with stack order, selection, visibility toggles, and opacity.
-- New documents, opening `.glyma` projects or importing PNG files, saving
-  projects, and exporting rendered PNGs through native file dialogs.
-- Undo/redo for visibility and opacity changes through the engine command
-  history.
+- Layers panel with stack order, selection, visibility toggles, opacity, and
+  add/delete/rename/reorder controls. Rename with double-click or F2.
+- New documents with a transparent or solid background color, opening `.glyma`
+  projects or importing PNG files, saving projects, Save As, and exporting
+  rendered PNGs through native file dialogs.
+- Unsaved-changes guard before New, Open, and window close with Save, Discard,
+  and Cancel choices; modified documents show a `*` in the title bar.
+- Undo/redo for layer add/remove/reorder/rename, visibility, and opacity
+  changes through the engine command history.
 - Dark neutral Qt stylesheet with a neutral workspace around the canvas.
 
 File and Edit actions use the existing engine serialization, PNG, and
@@ -165,8 +169,8 @@ Undo/redo history is session-only and is not serialized.
 
 - No JPEG/WebP/SVG/PSD support.
 - No painting tools, brush strokes, selections, transformations, or GPU rendering.
-- No layer creation, deletion, reordering, renaming, or blending modes in the UI.
-- Undo/redo in the UI currently covers layer visibility and opacity changes.
+- No layer duplication, merging, grouping, blend modes, or drag-and-drop
+  reordering (the layer toolbar provides add/delete/rename/move controls).
 - No undo/redo memory budgeting beyond count limits.
 - No color profile/ICC or wide-gamut management.
 - No autosave, recovery snapshots, encryption, or format migration yet.

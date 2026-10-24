@@ -4,6 +4,10 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCloseEvent>
+#include <QColor>
+#include <QColorDialog>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -17,6 +21,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QSize>
 #include <QSpinBox>
 #include <QStatusBar>
@@ -250,6 +255,9 @@ void MainWindow::connectSignals() {
         updateTitle();
         refreshStatus();
     });
+    connect(&controller_, &AppController::modifiedChanged, this, [this] {
+        updateTitle();
+    });
     connect(&controller_, &AppController::errorOccurred, this, [this](const QString& message) {
         showError(message);
     });
@@ -257,6 +265,27 @@ void MainWindow::connectSignals() {
     connect(layerDock_, &LayerDock::layerSelected, this, [this](quint64 layerId) {
         controller_.selectLayer(static_cast<core::LayerId>(layerId));
     });
+    connect(layerDock_, &LayerDock::addLayerRequested, this, [this] {
+        controller_.addLayer();
+    });
+    connect(layerDock_, &LayerDock::deleteLayerRequested, this, [this] {
+        controller_.removeLayer(controller_.selectedLayerId());
+    });
+    connect(layerDock_, &LayerDock::moveLayerUpRequested, this, [this] {
+        controller_.moveLayerUp(controller_.selectedLayerId());
+    });
+    connect(layerDock_, &LayerDock::moveLayerDownRequested, this, [this] {
+        controller_.moveLayerDown(controller_.selectedLayerId());
+    });
+    connect(
+        layerDock_,
+        &LayerDock::layerRenamed,
+        this,
+        [this](quint64 layerId, const QString& name) {
+            controller_.renameLayer(static_cast<core::LayerId>(layerId), name);
+        },
+        Qt::QueuedConnection
+    );
     connect(
         layerDock_,
         &LayerDock::visibilityToggled,
@@ -372,6 +401,33 @@ void MainWindow::applyStyle() {
         QSpinBox::up-button:hover, QSpinBox::down-button:hover {
             background-color: #414148;
         }
+        QLineEdit, QComboBox {
+            background-color: #2b2b2f;
+            color: #e4e4e6;
+            border: 1px solid #3a3a40;
+            padding: 3px;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #2a2a2e;
+            color: #e4e4e6;
+            selection-background-color: #3c6da6;
+        }
+        QPushButton {
+            background-color: #323238;
+            color: #e4e4e6;
+            border: 1px solid #414148;
+            padding: 4px 10px;
+            border-radius: 3px;
+        }
+        QPushButton:hover {
+            background-color: #3c3c44;
+        }
+        QPushButton:pressed {
+            background-color: #2c2c32;
+        }
+        QPushButton:disabled {
+            color: #707076;
+        }
         QStatusBar {
             background-color: #26262a;
             color: #a8a8ad;
@@ -434,7 +490,51 @@ void MainWindow::updateActions() {
 
 void MainWindow::updateTitle() {
     const QString name = QString::fromStdString(controller_.document().name());
-    setWindowTitle(tr("Glyma - %1").arg(name));
+    setWindowTitle(tr("Glyma - %1[*]").arg(name));
+    setWindowModified(controller_.isModified());
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (!prepareForDestructiveAction()) {
+        event->ignore();
+        return;
+    }
+    event->accept();
+}
+
+bool MainWindow::prepareForDestructiveAction() {
+    return confirmUnsavedChanges(
+        controller_.isModified(),
+        [this] { return promptUnsavedChanges(); },
+        [this] { return saveCurrentDocument(); }
+    );
+}
+
+UnsavedChoice MainWindow::promptUnsavedChanges() {
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(tr("Unsaved Changes"));
+    box.setText(
+        tr("Save changes to \"%1\"?")
+            .arg(QString::fromStdString(controller_.document().name()))
+    );
+    box.setInformativeText(
+        tr("Your changes will be lost if you do not save them.")
+    );
+    box.setStandardButtons(
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel
+    );
+    box.setDefaultButton(QMessageBox::Save);
+    box.setEscapeButton(QMessageBox::Cancel);
+
+    switch (box.exec()) {
+    case QMessageBox::Save:
+        return UnsavedChoice::Save;
+    case QMessageBox::Discard:
+        return UnsavedChoice::Discard;
+    default:
+        return UnsavedChoice::Cancel;
+    }
 }
 
 void MainWindow::onNew() {
@@ -452,38 +552,82 @@ void MainWindow::onNew() {
     heightSpin->setValue(720);
     heightSpin->setSuffix(tr(" px"));
 
+    auto* backgroundCombo = new QComboBox(&dialog);
+    backgroundCombo->addItem(tr("Transparent"));
+    backgroundCombo->addItem(tr("Solid Color"));
+
+    QColor backgroundColor(255, 255, 255, 255);
+    auto* colorButton = new QPushButton(&dialog);
+    colorButton->setEnabled(false);
+    const auto updateColorButton = [colorButton, &backgroundColor] {
+        colorButton->setText(backgroundColor.name(QColor::HexRgb));
+    };
+    updateColorButton();
+
+    connect(
+        backgroundCombo, &QComboBox::currentIndexChanged,
+        this, [colorButton](int index) {
+            colorButton->setEnabled(index == 1);
+        }
+    );
+    connect(colorButton, &QPushButton::clicked, this, [this, &backgroundColor, updateColorButton] {
+        const QColor chosen = QColorDialog::getColor(
+            backgroundColor, this, tr("Background Color"),
+            QColorDialog::ShowAlphaChannel
+        );
+        if (chosen.isValid()) {
+            backgroundColor = chosen;
+            updateColorButton();
+        }
+    });
+
     layout->addRow(tr("Name:"), nameEdit);
     layout->addRow(tr("Width:"), widthSpin);
     layout->addRow(tr("Height:"), heightSpin);
+    layout->addRow(tr("Background:"), backgroundCombo);
+    layout->addRow(QString(), colorButton);
 
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog
     );
     layout->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [this, &dialog, widthSpin, heightSpin] {
+        const std::uint64_t pixels =
+            static_cast<std::uint64_t>(widthSpin->value()) *
+            static_cast<std::uint64_t>(heightSpin->value());
+        if (pixels > core::Document::maxPixelCount) {
+            QMessageBox::warning(
+                &dialog,
+                tr("New Document"),
+                tr("The requested canvas exceeds the %1 megapixel limit.")
+                    .arg(core::Document::maxPixelCount / (1024 * 1024))
+            );
+            return;
+        }
+        dialog.accept();
+    });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
-
-    const std::uint64_t pixels =
-        static_cast<std::uint64_t>(widthSpin->value()) *
-        static_cast<std::uint64_t>(heightSpin->value());
-    if (pixels > core::Document::maxPixelCount) {
-        QMessageBox::warning(
-            this,
-            tr("New Document"),
-            tr("The requested canvas exceeds the %1 megapixel limit.")
-                .arg(core::Document::maxPixelCount / (1024 * 1024))
-        );
+    if (!prepareForDestructiveAction()) {
         return;
     }
 
+    const bool solidBackground = backgroundCombo->currentIndex() == 1;
+    const core::Pixel pixel{
+        static_cast<std::uint8_t>(backgroundColor.red()),
+        static_cast<std::uint8_t>(backgroundColor.green()),
+        static_cast<std::uint8_t>(backgroundColor.blue()),
+        static_cast<std::uint8_t>(backgroundColor.alpha())
+    };
     if (controller_.newDocument(
             nameEdit->text(),
             static_cast<std::uint32_t>(widthSpin->value()),
-            static_cast<std::uint32_t>(heightSpin->value())
+            static_cast<std::uint32_t>(heightSpin->value()),
+            solidBackground,
+            pixel
         )) {
         statusBar()->showMessage(tr("Created a new document."), 3000);
     }
@@ -502,24 +646,39 @@ void MainWindow::onOpen() {
     if (path.isEmpty()) {
         return;
     }
+    if (!prepareForDestructiveAction()) {
+        return;
+    }
     if (controller_.openFile(path)) {
         statusBar()->showMessage(tr("Opened %1").arg(QFileInfo(path).fileName()), 3000);
     }
 }
 
 void MainWindow::onSave() {
+    (void)saveCurrentDocument();
+}
+
+void MainWindow::onSaveAs() {
+    (void)saveDocumentAs();
+}
+
+bool MainWindow::saveCurrentDocument() {
+    bool saved = false;
     if (controller_.filePath().isEmpty()) {
-        onSaveAs();
-        return;
+        saved = saveDocumentAs();
+    } else {
+        saved = controller_.save(controller_.filePath());
     }
-    if (controller_.save(controller_.filePath())) {
+
+    if (saved) {
         statusBar()->showMessage(
             tr("Saved %1").arg(QFileInfo(controller_.filePath()).fileName()), 3000
         );
     }
+    return saved;
 }
 
-void MainWindow::onSaveAs() {
+bool MainWindow::saveDocumentAs() {
     QString suggested = controller_.filePath();
     if (suggested.isEmpty()) {
         suggested = QDir(QDir::homePath()).filePath(
@@ -535,16 +694,19 @@ void MainWindow::onSaveAs() {
         tr("Glyma Project (*.glyma)")
     );
     if (path.isEmpty()) {
-        return;
+        return false;
     }
     if (QFileInfo(path).suffix().isEmpty()) {
         path += QStringLiteral(".glyma");
     }
-    if (controller_.save(path)) {
+
+    const bool saved = controller_.save(path);
+    if (saved) {
         statusBar()->showMessage(
             tr("Saved %1").arg(QFileInfo(path).fileName()), 3000
         );
     }
+    return saved;
 }
 
 void MainWindow::onExportPng() {

@@ -91,11 +91,13 @@ if(GLYMA_BUILD_APP)
     add_library(glyma_app_ui STATIC
         include/glyma/app/app_controller.hpp
         include/glyma/app/canvas_view.hpp
+        include/glyma/app/document_lifecycle.hpp
         include/glyma/app/layer_dock.hpp
         include/glyma/app/main_window.hpp
         include/glyma/app/qt_image.hpp
         src/app/app_controller.cpp
         src/app/canvas_view.cpp
+        src/app/document_lifecycle.cpp
         src/app/layer_dock.cpp
         src/app/main_window.cpp
         src/app/qt_image.cpp
@@ -116,6 +118,13 @@ if(BUILD_TESTING)
     add_executable(glyma_tests
         tests/image_buffer_tests.cpp
     )
+
+    add_executable(glyma_lifecycle_tests
+        tests/lifecycle_tests.cpp
+        src/app/document_lifecycle.cpp
+    )
+    target_link_libraries(glyma_lifecycle_tests PRIVATE glyma_core)
+    target_compile_options(glyma_lifecycle_tests PRIVATE -Wall -Wextra -Wpedantic)
 
     add_executable(glyma_layer_tests
         tests/layer_tests.cpp
@@ -169,6 +178,11 @@ if(BUILD_TESTING)
     add_test(
         NAME glyma_history_tests
         COMMAND glyma_history_tests
+    )
+
+    add_test(
+        NAME glyma_lifecycle_tests
+        COMMAND glyma_lifecycle_tests
     )
 
     add_test(

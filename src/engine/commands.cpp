@@ -90,41 +90,62 @@ bool RemoveLayerCommand::undo(Document& document) {
         restored.setOpacity(capturedOpacity_);
         restored.setPosition(capturedX_, capturedY_);
 
-        // Try to restore at original position
+        // Restore at the original bottom-to-top index. The layer is appended
+        // first, then moved into place.
         auto& stack = document.layerStack();
-        // If inserting at arbitrary position, easier to add then move; but stack
-        // API doesn't have insert at index - move up/down until position.
         const LayerId rid = stack.addLayer(std::move(restored));
         if (rid == Layer::invalidId) {
             return false;
         }
-        // Move to original index (bottom-to-top). Move up/down repeatedly.
-        const std::size_t targetIndex = capturedIndex_;
-        // Adjust by moving
-        // Find current position
-        for (int steps = 0; steps < 10000; ++steps) {
-            const auto& ls = stack.layers();
-            // find index
-            std::size_t cur = static_cast<std::size_t>(-1);
-            for (std::size_t i = 0; i < ls.size(); ++i) {
-                if (ls[i].id() == rid) {
-                    cur = i;
-                    break;
-                }
-            }
-            if (cur == targetIndex) {
-                break;
-            }
-            if (cur < targetIndex) {
-                if (!stack.moveLayerUp(rid)) break;
-            } else {
-                if (!stack.moveLayerDown(rid)) break;
-            }
+        if (capturedIndex_ >= stack.size()) {
+            return false;
+        }
+        if (stack.layers()[capturedIndex_].id() != rid &&
+            !stack.moveLayer(rid, capturedIndex_)) {
+            return false;
         }
         return true;
     } catch (...) {
         return false;
     }
+}
+
+MoveLayerCommand::MoveLayerCommand(LayerId id, std::size_t newIndex)
+    : targetId_(id), newIndex_(newIndex) {}
+
+std::string MoveLayerCommand::name() const {
+    return "MoveLayer";
+}
+
+bool MoveLayerCommand::execute(Document& document) {
+    auto& stack = document.layerStack();
+    const auto& layers = stack.layers();
+
+    std::size_t currentIndex = static_cast<std::size_t>(-1);
+    for (std::size_t i = 0; i < layers.size(); ++i) {
+        if (layers[i].id() == targetId_) {
+            currentIndex = i;
+            break;
+        }
+    }
+
+    if (currentIndex == static_cast<std::size_t>(-1) ||
+        newIndex_ >= stack.size() || currentIndex == newIndex_) {
+        return false;
+    }
+
+    if (!captured_) {
+        oldIndex_ = currentIndex;
+        captured_ = true;
+    }
+    return stack.moveLayer(targetId_, newIndex_);
+}
+
+bool MoveLayerCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    return document.layerStack().moveLayer(targetId_, oldIndex_);
 }
 
 ChangeLayerPropertiesCommand::ChangeLayerPropertiesCommand(

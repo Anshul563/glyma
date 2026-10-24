@@ -38,6 +38,10 @@ public:
     bool moveLayerUp(LayerId id) noexcept;
     bool moveLayerDown(LayerId id) noexcept;
 
+    // Move a layer to an explicit bottom-to-top index. Returns false if the
+    // layer is missing, the index is out of range, or the position is unchanged.
+    bool moveLayer(LayerId id, std::size_t newIndex) noexcept;
+
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] bool empty() const noexcept;
 
