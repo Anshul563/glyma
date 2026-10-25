@@ -8,6 +8,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QImage>
@@ -1330,6 +1331,126 @@ void testIconIntegration() {
     assert(opaque > 0);
 }
 
+void testWorkspaceLayout() {
+    MainWindow window;
+
+    auto* mainBar = window.findChild<QToolBar*>(QStringLiteral("mainToolBar"));
+    auto* toolsBar = window.findChild<QToolBar*>(QStringLiteral("toolsToolBar"));
+    auto* optionsBar =
+        window.findChild<QToolBar*>(QStringLiteral("toolOptionsToolBar"));
+    assert(mainBar != nullptr);
+    assert(toolsBar != nullptr);
+    assert(optionsBar != nullptr);
+
+    // Five-area workspace: menu + options on top, tools on the left, the
+    // canvas in the centre, and the panels on the right.
+    assert(window.toolBarArea(mainBar) == Qt::TopToolBarArea);
+    assert(window.toolBarArea(optionsBar) == Qt::TopToolBarArea);
+    assert(window.toolBarArea(toolsBar) == Qt::LeftToolBarArea);
+    assert(toolsBar->orientation() == Qt::Vertical);
+    assert(optionsBar->orientation() == Qt::Horizontal);
+    assert(toolsBar->toolButtonStyle() == Qt::ToolButtonIconOnly);
+
+    auto* layers = window.findChild<QDockWidget*>(QStringLiteral("layersDock"));
+    auto* typography = window.findChild<QDockWidget*>(QStringLiteral("typographyDock"));
+    auto* shape = window.findChild<QDockWidget*>(QStringLiteral("shapeDock"));
+    assert(layers != nullptr);
+    assert(typography != nullptr);
+    assert(shape != nullptr);
+    assert(window.dockWidgetArea(layers) == Qt::RightDockWidgetArea);
+    assert(window.dockWidgetArea(typography) == Qt::RightDockWidgetArea);
+    assert(window.dockWidgetArea(shape) == Qt::RightDockWidgetArea);
+}
+
+void testToolOptionsBarContextual() {
+    MainWindow window;
+    auto* canvas = window.findChild<CanvasView*>(QStringLiteral("canvasView"));
+    auto* brushOpts =
+        window.findChild<QAction*>(QStringLiteral("brushOptionsAction"));
+    auto* fillOpts =
+        window.findChild<QAction*>(QStringLiteral("fillOptionsAction"));
+    auto* selectionOpts =
+        window.findChild<QAction*>(QStringLiteral("selectionOptionsAction"));
+    auto* cropOpts =
+        window.findChild<QAction*>(QStringLiteral("cropOptionsAction"));
+    auto* hintOpts =
+        window.findChild<QAction*>(QStringLiteral("hintOptionsAction"));
+    assert(canvas != nullptr);
+    assert(brushOpts != nullptr);
+    assert(fillOpts != nullptr);
+    assert(selectionOpts != nullptr);
+    assert(cropOpts != nullptr);
+    assert(hintOpts != nullptr);
+
+    // Brush is the default tool, so only its options are shown.
+    assert(canvas->activeTool() == CanvasView::Tool::Brush);
+    assert(brushOpts->isVisible());
+    assert(!fillOpts->isVisible());
+    assert(!selectionOpts->isVisible());
+    assert(!cropOpts->isVisible());
+    assert(!hintOpts->isVisible());
+
+    auto* bucket = window.findChild<QAction*>(QStringLiteral("actionToolBucketFill"));
+    bucket->trigger();
+    QCoreApplication::processEvents();
+    assert(canvas->activeTool() == CanvasView::Tool::BucketFill);
+    assert(!brushOpts->isVisible());
+    assert(fillOpts->isVisible());
+
+    auto* rectSel =
+        window.findChild<QAction*>(QStringLiteral("actionToolRectangleSelect"));
+    rectSel->trigger();
+    QCoreApplication::processEvents();
+    assert(canvas->activeTool() == CanvasView::Tool::SelectRectangle);
+    assert(selectionOpts->isVisible());
+    assert(!fillOpts->isVisible());
+
+    auto* crop = window.findChild<QAction*>(QStringLiteral("actionImageCrop"));
+    crop->trigger();
+    QCoreApplication::processEvents();
+    assert(canvas->activeTool() == CanvasView::Tool::Crop);
+    assert(cropOpts->isVisible());
+    assert(!selectionOpts->isVisible());
+
+    auto* text = window.findChild<QAction*>(QStringLiteral("actionToolText"));
+    text->trigger();
+    QCoreApplication::processEvents();
+    assert(canvas->activeTool() == CanvasView::Tool::Text);
+    assert(hintOpts->isVisible());
+    assert(!cropOpts->isVisible());
+
+    auto* shape = window.findChild<QAction*>(QStringLiteral("actionToolShapeEllipse"));
+    shape->trigger();
+    QCoreApplication::processEvents();
+    assert(canvas->activeTool() == CanvasView::Tool::ShapeEllipse);
+    assert(hintOpts->isVisible());
+
+    auto* brush = window.findChild<QAction*>(QStringLiteral("actionToolBrush"));
+    brush->trigger();
+    QCoreApplication::processEvents();
+    assert(brushOpts->isVisible());
+    assert(!hintOpts->isVisible());
+}
+
+void testWorkspaceReset() {
+    MainWindow window;
+    auto* layers = window.findChild<QDockWidget*>(QStringLiteral("layersDock"));
+    auto* reset =
+        window.findChild<QAction*>(QStringLiteral("actionViewResetWorkspace"));
+    assert(layers != nullptr);
+    assert(reset != nullptr);
+    assert(!reset->icon().isNull());
+    assert(!layers->isHidden());
+
+    layers->hide();
+    assert(layers->isHidden());
+
+    reset->trigger();
+    QCoreApplication::processEvents();
+    assert(!layers->isHidden());
+    assert(window.dockWidgetArea(layers) == Qt::RightDockWidgetArea);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -1376,6 +1497,9 @@ int main(int argc, char* argv[]) {
     testControllerShapeIntegration();
     testMainWindowShapeTool();
     testIconIntegration();
+    testWorkspaceLayout();
+    testToolOptionsBarContextual();
+    testWorkspaceReset();
     testControllerFailurePaths();
     testControllerFileOperations();
 

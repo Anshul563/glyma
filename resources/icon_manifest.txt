@@ -76,3 +76,4 @@ color = color-picker.svg
 app = shapes.svg
 apply = checkmark-circle-01.svg
 cancel = cancel-01.svg
+workspace-reset = layout-01.svg

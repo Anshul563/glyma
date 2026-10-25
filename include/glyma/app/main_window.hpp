@@ -11,9 +11,12 @@
 class QAction;
 class QActionGroup;
 class QCloseEvent;
+class QDockWidget;
 class QLabel;
 class QSpinBox;
+class QToolBar;
 class QToolButton;
+class QWidgetAction;
 
 namespace glyma::app {
 
@@ -40,8 +43,13 @@ private:
     void createToolOptions();
     void createStatusBar();
     void createDocks();
+    void arrangeDefaultWorkspace();
+    void restoreWorkspace();
+    void saveWorkspace();
+    void resetWorkspace();
     void connectSignals();
     void applyStyle();
+    void updateToolOptions();
     void refreshCanvas();
     void refreshLayers();
     void refreshTypography();
@@ -88,6 +96,17 @@ private:
     LayerDock* layerDock_{nullptr};
     TypographyPanel* typographyPanel_{nullptr};
     ShapePropertiesPanel* shapePropertiesPanel_{nullptr};
+    QDockWidget* layersDock_{nullptr};
+    QDockWidget* typographyDock_{nullptr};
+    QDockWidget* shapeDock_{nullptr};
+    QToolBar* toolsToolBar_{nullptr};
+    QToolBar* optionsToolBar_{nullptr};
+    QWidgetAction* brushOptionsAction_{nullptr};
+    QWidgetAction* fillOptionsAction_{nullptr};
+    QWidgetAction* selectionOptionsAction_{nullptr};
+    QWidgetAction* cropOptionsAction_{nullptr};
+    QWidgetAction* hintOptionsAction_{nullptr};
+    QLabel* hintLabel_{nullptr};
     QLabel* statusInfo_{nullptr};
 
     QAction* newAction_{nullptr};
@@ -103,6 +122,7 @@ private:
     QAction* fitAction_{nullptr};
     QAction* resetZoomAction_{nullptr};
     QAction* imageAdjustmentsAction_{nullptr};
+    QAction* resetWorkspaceAction_{nullptr};
     QAction* aboutAction_{nullptr};
 
     QAction* cropAction_{nullptr};
@@ -141,6 +161,7 @@ private:
     QAction* clearSelectionAction_{nullptr};
     QAction* invertSelectionAction_{nullptr};
     QToolButton* colorButton_{nullptr};
+    QToolButton* fillColorButton_{nullptr};
     QSpinBox* brushSizeSpin_{nullptr};
     QSpinBox* brushOpacitySpin_{nullptr};
     QSpinBox* brushHardnessSpin_{nullptr};

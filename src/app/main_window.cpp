@@ -19,7 +19,9 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGridLayout>
+#include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -29,11 +31,14 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSettings>
 #include <QSize>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QToolButton>
+#include <QWidgetAction>
 
 #include "glyma/app/adjustment_dialog.hpp"
 #include "glyma/app/canvas_view.hpp"
@@ -76,13 +81,15 @@ MainWindow::MainWindow(QWidget* parent)
     setCentralWidget(canvas_);
 
     createActions();
-    createMenus();
     createToolBar();
-    createStatusBar();
     createToolOptions();
+    createStatusBar();
     createDocks();
+    arrangeDefaultWorkspace();
+    createMenus();
     connectSignals();
     applyStyle();
+    restoreWorkspace();
     setWindowIcon(IconManager::icon(QStringLiteral("app")));
 
     refreshCanvas();
@@ -242,6 +249,15 @@ void MainWindow::createActions() {
         QStringLiteral("actionImageAdjustments")
     );
 
+    resetWorkspaceAction_ = makeAction(
+        this,
+        tr("Reset &Workspace"),
+        QKeySequence(),
+        QStringLiteral("actionViewResetWorkspace")
+    );
+    resetWorkspaceAction_->setIcon(IconManager::icon(QStringLiteral("workspace-reset")));
+    resetWorkspaceAction_->setToolTip(tr("Restore the default panel layout"));
+
     aboutAction_ = makeAction(
         this, tr("&About Glyma"), QKeySequence(), QStringLiteral("actionHelpAbout")
     );
@@ -361,9 +377,50 @@ void MainWindow::createMenus() {
     viewMenu->addSeparator();
     viewMenu->addAction(fitAction_);
     viewMenu->addAction(resetZoomAction_);
+    viewMenu->addSeparator();
+
+    QMenu* panelsMenu = viewMenu->addMenu(tr("&Panels"));
+    panelsMenu->addAction(layersDock_->toggleViewAction());
+    panelsMenu->addAction(typographyDock_->toggleViewAction());
+    panelsMenu->addAction(shapeDock_->toggleViewAction());
+
+    QMenu* toolbarsMenu = viewMenu->addMenu(tr("&Toolbars"));
+    toolbarsMenu->addAction(toolsToolBar_->toggleViewAction());
+    toolbarsMenu->addAction(optionsToolBar_->toggleViewAction());
+
+    viewMenu->addSeparator();
+    viewMenu->addAction(resetWorkspaceAction_);
 
     QMenu* imageMenu = menuBar()->addMenu(tr("&Image"));
     imageMenu->addAction(imageAdjustmentsAction_);
+    imageMenu->addSeparator();
+    imageMenu->addAction(cropAction_);
+    imageMenu->addAction(cropApplyAction_);
+    imageMenu->addAction(cropCancelAction_);
+    imageMenu->addSeparator();
+    imageMenu->addAction(imageSizeAction_);
+    imageMenu->addAction(canvasSizeAction_);
+    imageMenu->addSeparator();
+    QMenu* rotateImageMenu = imageMenu->addMenu(tr("&Rotate"));
+    rotateImageMenu->addAction(rotateCanvasCWAction_);
+    rotateImageMenu->addAction(rotateCanvasCCWAction_);
+    rotateImageMenu->addAction(rotateCanvas180Action_);
+    rotateImageMenu->addAction(rotateCanvasFreeAction_);
+    QMenu* flipImageMenu = imageMenu->addMenu(tr("&Flip"));
+    flipImageMenu->addAction(flipCanvasHorizontalAction_);
+    flipImageMenu->addAction(flipCanvasVerticalAction_);
+
+    QMenu* layerMenu = menuBar()->addMenu(tr("&Layer"));
+    layerMenu->addAction(rotateLayerCWAction_);
+    layerMenu->addAction(rotateLayerCCWAction_);
+    layerMenu->addAction(rotateLayer180Action_);
+    layerMenu->addAction(rotateLayerFreeAction_);
+    layerMenu->addSeparator();
+    layerMenu->addAction(flipLayerHorizontalAction_);
+    layerMenu->addAction(flipLayerVerticalAction_);
+    layerMenu->addSeparator();
+    layerMenu->addAction(scaleLayerAction_);
+    layerMenu->addAction(translateLayerAction_);
 
     QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(aboutAction_);
@@ -389,164 +446,111 @@ void MainWindow::createToolBar() {
 }
 
 void MainWindow::createToolOptions() {
-    auto* toolBar = addToolBar(tr("Tools"));
-    toolBar->setObjectName(QStringLiteral("toolsToolBar"));
-    toolBar->setMovable(false);
-    toolBar->setIconSize(IconManager::toolbarIconSize());
-    toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    // Left vertical tool palette: one compact, icon-only button per tool.
+    auto* tools = new QToolBar(tr("Tools"), this);
+    tools->setObjectName(QStringLiteral("toolsToolBar"));
+    tools->setMovable(false);
+    tools->setFloatable(false);
+    tools->setOrientation(Qt::Vertical);
+    tools->setIconSize(IconManager::toolbarIconSize());
+    tools->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    addToolBar(Qt::LeftToolBarArea, tools);
+    toolsToolBar_ = tools;
 
     toolGroup_ = new QActionGroup(this);
     toolGroup_->setExclusive(true);
 
-    brushToolAction_ = makeAction(
-        this, tr("&Brush"), QKeySequence(QStringLiteral("B")),
-        QStringLiteral("actionToolBrush")
-    );
-    brushToolAction_->setCheckable(true);
-    brushToolAction_->setIcon(IconManager::icon(QStringLiteral("brush")));
-    brushToolAction_->setToolTip(tr("Paint with the foreground color"));
+    const auto makeTool = [this, tools](
+                              const QString& text,
+                              const QKeySequence& shortcut,
+                              const QString& objectName,
+                              const QString& iconName,
+                              const QString& toolTip
+                          ) {
+        auto* action = makeAction(this, text, shortcut, objectName);
+        action->setCheckable(true);
+        action->setIcon(IconManager::icon(iconName));
+        action->setToolTip(toolTip);
+        toolGroup_->addAction(action);
+        tools->addAction(action);
+        return action;
+    };
 
-    eraserToolAction_ = makeAction(
-        this, tr("&Eraser"), QKeySequence(QStringLiteral("E")),
-        QStringLiteral("actionToolEraser")
+    brushToolAction_ = makeTool(
+        tr("&Brush"), QKeySequence(QStringLiteral("B")),
+        QStringLiteral("actionToolBrush"), QStringLiteral("brush"),
+        tr("Paint with the foreground color")
     );
-    eraserToolAction_->setCheckable(true);
-    eraserToolAction_->setIcon(IconManager::icon(QStringLiteral("eraser")));
-    eraserToolAction_->setToolTip(tr("Erase pixels to transparency"));
+    eraserToolAction_ = makeTool(
+        tr("&Eraser"), QKeySequence(QStringLiteral("E")),
+        QStringLiteral("actionToolEraser"), QStringLiteral("eraser"),
+        tr("Erase pixels to transparency")
+    );
+    tools->addSeparator();
 
-    toolGroup_->addAction(brushToolAction_);
-    toolGroup_->addAction(eraserToolAction_);
-    toolBar->addAction(brushToolAction_);
-    toolBar->addAction(eraserToolAction_);
-    toolBar->addSeparator();
+    rectangleSelectAction_ = makeTool(
+        tr("&Rectangle Select"), QKeySequence(QStringLiteral("R")),
+        QStringLiteral("actionToolRectangleSelect"),
+        QStringLiteral("rectangle-select"),
+        tr("Select a rectangular region")
+    );
+    ellipseSelectAction_ = makeTool(
+        tr("&Ellipse Select"), QKeySequence(),
+        QStringLiteral("actionToolEllipseSelect"),
+        QStringLiteral("ellipse-select"),
+        tr("Select an elliptical region")
+    );
+    bucketFillAction_ = makeTool(
+        tr("&Bucket Fill"), QKeySequence(),
+        QStringLiteral("actionToolBucketFill"), QStringLiteral("bucket-fill"),
+        tr("Fill connected areas with the foreground color")
+    );
+    tools->addSeparator();
 
-    rectangleSelectAction_ = makeAction(
-        this, tr("&Rectangle Select"), QKeySequence(QStringLiteral("R")),
-        QStringLiteral("actionToolRectangleSelect")
+    textToolAction_ = makeTool(
+        tr("&Text"), QKeySequence(QStringLiteral("T")),
+        QStringLiteral("actionToolText"), QStringLiteral("text"),
+        tr("Add editable text")
     );
-    rectangleSelectAction_->setCheckable(true);
-    rectangleSelectAction_->setIcon(
-        IconManager::icon(QStringLiteral("rectangle-select"))
-    );
-    rectangleSelectAction_->setToolTip(tr("Select a rectangular region"));
+    tools->addSeparator();
 
-    ellipseSelectAction_ = makeAction(
-        this, tr("&Ellipse Select"), QKeySequence(),
-        QStringLiteral("actionToolEllipseSelect")
+    shapeRectangleAction_ = makeTool(
+        tr("&Rectangle"), QKeySequence(QStringLiteral("U")),
+        QStringLiteral("actionToolShapeRectangle"),
+        QStringLiteral("shape-rectangle"),
+        tr("Draw a rectangle")
     );
-    ellipseSelectAction_->setCheckable(true);
-    ellipseSelectAction_->setIcon(
-        IconManager::icon(QStringLiteral("ellipse-select"))
+    shapeRoundedRectangleAction_ = makeTool(
+        tr("Rounded &Rectangle"), QKeySequence(),
+        QStringLiteral("actionToolShapeRoundedRectangle"),
+        QStringLiteral("shape-rounded-rectangle"),
+        tr("Draw a rounded rectangle")
     );
-    ellipseSelectAction_->setToolTip(tr("Select an elliptical region"));
-
-    bucketFillAction_ = makeAction(
-        this, tr("&Bucket Fill"), QKeySequence(),
-        QStringLiteral("actionToolBucketFill")
+    shapeEllipseAction_ = makeTool(
+        tr("&Ellipse"), QKeySequence(),
+        QStringLiteral("actionToolShapeEllipse"), QStringLiteral("shape-ellipse"),
+        tr("Draw an ellipse")
     );
-    bucketFillAction_->setCheckable(true);
-    bucketFillAction_->setIcon(
-        IconManager::icon(QStringLiteral("bucket-fill"))
+    shapeLineAction_ = makeTool(
+        tr("&Line"), QKeySequence(),
+        QStringLiteral("actionToolShapeLine"), QStringLiteral("shape-line"),
+        tr("Draw a line")
     );
-    bucketFillAction_->setToolTip(tr("Fill connected areas with the foreground color"));
-
-    textToolAction_ = makeAction(
-        this, tr("&Text"), QKeySequence(QStringLiteral("T")),
-        QStringLiteral("actionToolText")
+    shapeArrowAction_ = makeTool(
+        tr("&Arrow"), QKeySequence(),
+        QStringLiteral("actionToolShapeArrow"), QStringLiteral("shape-arrow"),
+        tr("Draw an arrow")
     );
-    textToolAction_->setCheckable(true);
-    textToolAction_->setIcon(
-        IconManager::icon(QStringLiteral("text"))
+    shapePolygonAction_ = makeTool(
+        tr("&Polygon"), QKeySequence(),
+        QStringLiteral("actionToolShapePolygon"), QStringLiteral("shape-polygon"),
+        tr("Draw a polygon")
     );
-    textToolAction_->setToolTip(tr("Add editable text"));
-
-    shapeRectangleAction_ = makeAction(
-        this, tr("&Rectangle"), QKeySequence(QStringLiteral("U")),
-        QStringLiteral("actionToolShapeRectangle")
-    );
-    shapeRectangleAction_->setCheckable(true);
-    shapeRectangleAction_->setIcon(
-        IconManager::icon(QStringLiteral("shape-rectangle"))
-    );
-    shapeRectangleAction_->setToolTip(tr("Draw a rectangle"));
-
-    shapeRoundedRectangleAction_ = makeAction(
-        this, tr("Rounded &Rectangle"), QKeySequence(),
-        QStringLiteral("actionToolShapeRoundedRectangle")
-    );
-    shapeRoundedRectangleAction_->setCheckable(true);
-    shapeRoundedRectangleAction_->setIcon(
-        IconManager::icon(QStringLiteral("shape-rounded-rectangle"))
-    );
-    shapeRoundedRectangleAction_->setToolTip(tr("Draw a rounded rectangle"));
-
-    shapeEllipseAction_ = makeAction(
-        this, tr("&Ellipse"), QKeySequence(),
-        QStringLiteral("actionToolShapeEllipse")
-    );
-    shapeEllipseAction_->setCheckable(true);
-    shapeEllipseAction_->setIcon(
-        IconManager::icon(QStringLiteral("shape-ellipse"))
-    );
-    shapeEllipseAction_->setToolTip(tr("Draw an ellipse"));
-
-    shapeLineAction_ = makeAction(
-        this, tr("&Line"), QKeySequence(),
-        QStringLiteral("actionToolShapeLine")
-    );
-    shapeLineAction_->setCheckable(true);
-    shapeLineAction_->setIcon(
-        IconManager::icon(QStringLiteral("shape-line"))
-    );
-    shapeLineAction_->setToolTip(tr("Draw a line"));
-
-    shapeArrowAction_ = makeAction(
-        this, tr("&Arrow"), QKeySequence(),
-        QStringLiteral("actionToolShapeArrow")
-    );
-    shapeArrowAction_->setCheckable(true);
-    shapeArrowAction_->setIcon(
-        IconManager::icon(QStringLiteral("shape-arrow"))
-    );
-    shapeArrowAction_->setToolTip(tr("Draw an arrow"));
-
-    shapePolygonAction_ = makeAction(
-        this, tr("&Polygon"), QKeySequence(),
-        QStringLiteral("actionToolShapePolygon")
-    );
-    shapePolygonAction_->setCheckable(true);
-    shapePolygonAction_->setIcon(
-        IconManager::icon(QStringLiteral("shape-polygon"))
-    );
-    shapePolygonAction_->setToolTip(tr("Draw a polygon"));
+    tools->addSeparator();
 
     cropAction_->setCheckable(true);
-
-    toolGroup_->addAction(rectangleSelectAction_);
-    toolGroup_->addAction(ellipseSelectAction_);
-    toolGroup_->addAction(bucketFillAction_);
-    toolGroup_->addAction(textToolAction_);
-    toolGroup_->addAction(shapeRectangleAction_);
-    toolGroup_->addAction(shapeRoundedRectangleAction_);
-    toolGroup_->addAction(shapeEllipseAction_);
-    toolGroup_->addAction(shapeLineAction_);
-    toolGroup_->addAction(shapeArrowAction_);
-    toolGroup_->addAction(shapePolygonAction_);
     toolGroup_->addAction(cropAction_);
-    toolBar->addAction(rectangleSelectAction_);
-    toolBar->addAction(ellipseSelectAction_);
-    toolBar->addAction(bucketFillAction_);
-    toolBar->addAction(textToolAction_);
-    toolBar->addAction(shapeRectangleAction_);
-    toolBar->addAction(shapeRoundedRectangleAction_);
-    toolBar->addAction(shapeEllipseAction_);
-    toolBar->addAction(shapeLineAction_);
-    toolBar->addAction(shapeArrowAction_);
-    toolBar->addAction(shapePolygonAction_);
-    toolBar->addAction(cropAction_);
-    toolBar->addAction(cropApplyAction_);
-    toolBar->addAction(cropCancelAction_);
-    toolBar->addSeparator();
+    tools->addAction(cropAction_);
 
     clearSelectionAction_ = makeAction(
         this, tr("&Clear Selection"), QKeySequence(),
@@ -564,20 +568,26 @@ void MainWindow::createToolOptions() {
         IconManager::icon(QStringLiteral("selection-invert"))
     );
     invertSelectionAction_->setToolTip(tr("Invert the current selection"));
-    toolBar->addAction(clearSelectionAction_);
-    toolBar->addAction(invertSelectionAction_);
-    toolBar->addSeparator();
 
-    colorButton_ = new QToolButton(toolBar);
-    colorButton_->setObjectName(QStringLiteral("toolColorButton"));
-    colorButton_->setAutoRaise(true);
-    colorButton_->setToolTip(tr("Foreground color"));
-    colorButton_->setIconSize(QSize(18, 18));
-    toolBar->addWidget(new QLabel(tr("Color"), toolBar));
-    toolBar->addWidget(colorButton_);
-    toolBar->addSeparator();
+    // Contextual tool options bar: shows only the active tool's settings.
+    auto* options = new QToolBar(tr("Tool Options"), this);
+    options->setObjectName(QStringLiteral("toolOptionsToolBar"));
+    options->setMovable(false);
+    options->setFloatable(false);
+    options->setIconSize(IconManager::panelIconSize());
+    options->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    addToolBar(Qt::TopToolBarArea, options);
+    optionsToolBar_ = options;
 
-    const auto addSpin = [this, toolBar](
+    const auto makeGroup = [](QWidget*& group) {
+        group = new QWidget();
+        auto* row = new QHBoxLayout(group);
+        row->setContentsMargins(4, 0, 4, 0);
+        row->setSpacing(6);
+        return row;
+    };
+    const auto addSpin = [](
+                             QHBoxLayout* row,
                              const QString& label,
                              const QString& objectName,
                              int minimum,
@@ -585,112 +595,202 @@ void MainWindow::createToolOptions() {
                              int value,
                              const QString& suffix
                          ) {
-        auto* spin = new QSpinBox(toolBar);
+        row->addWidget(new QLabel(label));
+        auto* spin = new QSpinBox();
         spin->setObjectName(objectName);
         spin->setRange(minimum, maximum);
         spin->setValue(value);
         spin->setSuffix(suffix);
         spin->setFixedWidth(72);
         spin->setKeyboardTracking(false);
-        toolBar->addWidget(new QLabel(label, toolBar));
-        toolBar->addWidget(spin);
-        connect(spin, &QSpinBox::valueChanged, this, [this] {
-            applyBrushSettings();
-        });
+        row->addWidget(spin);
         return spin;
     };
 
+    QWidget* brushOptions = nullptr;
+    auto* brushRow = makeGroup(brushOptions);
+    brushRow->addWidget(new QLabel(tr("Color")));
+    colorButton_ = new QToolButton();
+    colorButton_->setObjectName(QStringLiteral("toolColorButton"));
+    colorButton_->setAutoRaise(true);
+    colorButton_->setToolTip(tr("Foreground color"));
+    colorButton_->setIconSize(QSize(18, 18));
+    brushRow->addWidget(colorButton_);
+    brushRow->addSpacing(8);
     brushSizeSpin_ = addSpin(
-        tr("Size"), QStringLiteral("brushSizeSpin"),
+        brushRow, tr("Size"), QStringLiteral("brushSizeSpin"),
         1, static_cast<int>(core::BrushSettings::maxDiameter), 20,
         QStringLiteral(" px")
     );
     brushOpacitySpin_ = addSpin(
-        tr("Opacity"), QStringLiteral("brushOpacitySpin"),
+        brushRow, tr("Opacity"), QStringLiteral("brushOpacitySpin"),
         0, 100, 100, QStringLiteral("%")
     );
     brushHardnessSpin_ = addSpin(
-        tr("Hardness"), QStringLiteral("brushHardnessSpin"),
+        brushRow, tr("Hardness"), QStringLiteral("brushHardnessSpin"),
         0, 100, 100, QStringLiteral("%")
     );
+    brushRow->addStretch(1);
 
+    QWidget* fillOptions = nullptr;
+    auto* fillRow = makeGroup(fillOptions);
+    fillRow->addWidget(new QLabel(tr("Color")));
+    fillColorButton_ = new QToolButton();
+    fillColorButton_->setObjectName(QStringLiteral("fillColorButton"));
+    fillColorButton_->setAutoRaise(true);
+    fillColorButton_->setToolTip(tr("Fill color"));
+    fillColorButton_->setIconSize(QSize(18, 18));
+    fillRow->addWidget(fillColorButton_);
+    fillRow->addSpacing(8);
     fillToleranceSpin_ = addSpin(
-        tr("Tolerance"), QStringLiteral("fillToleranceSpin"),
-        0, core::FillSettings::maxTolerance, 0, QStringLiteral("")
+        fillRow, tr("Tolerance"), QStringLiteral("fillToleranceSpin"),
+        0, core::FillSettings::maxTolerance, 0, QString()
     );
     fillToleranceSpin_->setToolTip(
         tr("Per-channel absolute difference tolerance for the fill seed match")
     );
     fillOpacitySpin_ = addSpin(
-        tr("Opacity"), QStringLiteral("fillOpacitySpin"),
+        fillRow, tr("Opacity"), QStringLiteral("fillOpacitySpin"),
         0, 100, 100, QStringLiteral("%")
+    );
+    fillRow->addStretch(1);
+
+    QWidget* selectionOptions = nullptr;
+    auto* selectionRow = makeGroup(selectionOptions);
+    auto* clearButton = new QToolButton();
+    clearButton->setDefaultAction(clearSelectionAction_);
+    clearButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    selectionRow->addWidget(clearButton);
+    auto* invertButton = new QToolButton();
+    invertButton->setDefaultAction(invertSelectionAction_);
+    invertButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    selectionRow->addWidget(invertButton);
+    selectionRow->addStretch(1);
+
+    QWidget* cropOptions = nullptr;
+    auto* cropRow = makeGroup(cropOptions);
+    auto* cropApplyButton = new QToolButton();
+    cropApplyButton->setDefaultAction(cropApplyAction_);
+    cropApplyButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    cropRow->addWidget(cropApplyButton);
+    auto* cropCancelButton = new QToolButton();
+    cropCancelButton->setDefaultAction(cropCancelAction_);
+    cropCancelButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    cropRow->addWidget(cropCancelButton);
+    cropRow->addStretch(1);
+
+    QWidget* hintOptions = nullptr;
+    auto* hintRow = makeGroup(hintOptions);
+    hintLabel_ = new QLabel(tr("Adjust this layer in the Properties panel"));
+    hintLabel_->setObjectName(QStringLiteral("toolOptionsHint"));
+    hintRow->addWidget(hintLabel_);
+    hintRow->addStretch(1);
+
+    const auto addOptionsGroup = [options](
+                                     const QString& objectName,
+                                     QWidget* group
+                                 ) {
+        auto* action = new QWidgetAction(options);
+        action->setObjectName(objectName);
+        action->setDefaultWidget(group);
+        options->addAction(action);
+        return action;
+    };
+
+    brushOptionsAction_ = addOptionsGroup(
+        QStringLiteral("brushOptionsAction"), brushOptions
+    );
+    fillOptionsAction_ = addOptionsGroup(
+        QStringLiteral("fillOptionsAction"), fillOptions
+    );
+    selectionOptionsAction_ = addOptionsGroup(
+        QStringLiteral("selectionOptionsAction"), selectionOptions
+    );
+    cropOptionsAction_ = addOptionsGroup(
+        QStringLiteral("cropOptionsAction"), cropOptions
+    );
+    hintOptionsAction_ = addOptionsGroup(
+        QStringLiteral("hintOptionsAction"), hintOptions
     );
 
     connect(brushToolAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::Brush);
             controller_.setBrushMode(core::BrushMode::Paint);
+            updateToolOptions();
         }
     });
     connect(eraserToolAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::Brush);
             controller_.setBrushMode(core::BrushMode::Erase);
+            updateToolOptions();
         }
     });
     connect(rectangleSelectAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::SelectRectangle);
+            updateToolOptions();
         }
     });
     connect(ellipseSelectAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::SelectEllipse);
+            updateToolOptions();
         }
     });
     connect(bucketFillAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::BucketFill);
+            updateToolOptions();
         }
     });
     connect(cropAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::Crop);
+            updateToolOptions();
         }
     });
     connect(textToolAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::Text);
+            updateToolOptions();
         }
     });
     connect(shapeRectangleAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::ShapeRectangle);
+            updateToolOptions();
         }
     });
     connect(shapeRoundedRectangleAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::ShapeRoundedRectangle);
+            updateToolOptions();
         }
     });
     connect(shapeEllipseAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::ShapeEllipse);
+            updateToolOptions();
         }
     });
     connect(shapeLineAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::ShapeLine);
+            updateToolOptions();
         }
     });
     connect(shapeArrowAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::ShapeArrow);
+            updateToolOptions();
         }
     });
     connect(shapePolygonAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked) {
             canvas_->setActiveTool(CanvasView::Tool::ShapePolygon);
+            updateToolOptions();
         }
     });
     connect(clearSelectionAction_, &QAction::triggered, this, [this] {
@@ -701,6 +801,18 @@ void MainWindow::createToolOptions() {
     });
     connect(colorButton_, &QToolButton::clicked, this, [this] {
         chooseBrushColor();
+    });
+    connect(fillColorButton_, &QToolButton::clicked, this, [this] {
+        chooseBrushColor();
+    });
+    connect(brushSizeSpin_, &QSpinBox::valueChanged, this, [this] {
+        applyBrushSettings();
+    });
+    connect(brushOpacitySpin_, &QSpinBox::valueChanged, this, [this] {
+        applyBrushSettings();
+    });
+    connect(brushHardnessSpin_, &QSpinBox::valueChanged, this, [this] {
+        applyBrushSettings();
     });
     connect(fillToleranceSpin_, &QSpinBox::valueChanged, this, [this] {
         applyFillSettings();
@@ -713,6 +825,45 @@ void MainWindow::createToolOptions() {
     updateColorButton();
     applyBrushSettings();
     applyFillSettings();
+    updateToolOptions();
+}
+
+void MainWindow::updateToolOptions() {
+    const auto tool = canvas_->activeTool();
+    const bool brush = tool == CanvasView::Tool::Brush;
+    const bool fill = tool == CanvasView::Tool::BucketFill;
+    const bool select =
+        tool == CanvasView::Tool::SelectRectangle ||
+        tool == CanvasView::Tool::SelectEllipse;
+    const bool crop = tool == CanvasView::Tool::Crop;
+    const bool text = tool == CanvasView::Tool::Text;
+    const bool shape = CanvasView::isShapeTool(tool);
+
+    if (brushOptionsAction_ != nullptr) {
+        brushOptionsAction_->setVisible(brush);
+        fillOptionsAction_->setVisible(fill);
+        selectionOptionsAction_->setVisible(select);
+        cropOptionsAction_->setVisible(crop);
+        hintOptionsAction_->setVisible(!brush && !fill && !select && !crop);
+    }
+
+    if (hintLabel_ != nullptr) {
+        if (text) {
+            hintLabel_->setText(tr("Edit the text layer in the Typography panel"));
+        } else if (shape) {
+            hintLabel_->setText(tr("Adjust the shape in the Shape panel"));
+        } else {
+            hintLabel_->setText(tr("Select a tool from the toolbar"));
+        }
+    }
+
+    if (text && typographyDock_ != nullptr) {
+        typographyDock_->show();
+        typographyDock_->raise();
+    } else if (shape && shapeDock_ != nullptr) {
+        shapeDock_->show();
+        shapeDock_->raise();
+    }
 }
 
 void MainWindow::createStatusBar() {
@@ -722,40 +873,99 @@ void MainWindow::createStatusBar() {
     statusBar()->showMessage(tr("Ready"));
 }
 
-void MainWindow::createDocks() {
-    auto* dock = new QDockWidget(tr("Layers"), this);
-    dock->setObjectName(QStringLiteral("layersDock"));
+namespace {
+
+QScrollArea* wrapPanel(QWidget* content, int minimumWidth) {
+    auto* scroll = new QScrollArea();
+    scroll->setObjectName(QStringLiteral("panelScroll"));
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setWidget(content);
+    scroll->setMinimumWidth(minimumWidth);
+    return scroll;
+}
+
+QDockWidget* makePanelDock(const QString& title, const QString& objectName, QWidget* parent) {
+    auto* dock = new QDockWidget(title, parent);
+    dock->setObjectName(objectName);
     dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    return dock;
+}
 
-    layerDock_ = new LayerDock(dock);
-    layerDock_->setMinimumWidth(220);
-    dock->setWidget(layerDock_);
-    addDockWidget(Qt::RightDockWidgetArea, dock);
+} // namespace
 
-    auto* typographyDock = new QDockWidget(tr("Typography"), this);
-    typographyDock->setObjectName(QStringLiteral("typographyDock"));
-    typographyDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    typographyDock->setFeatures(
-        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
+void MainWindow::createDocks() {
+    layersDock_ = makePanelDock(
+        tr("Layers"), QStringLiteral("layersDock"), this
     );
-    typographyPanel_ = new TypographyPanel(typographyDock);
-    typographyPanel_->setMinimumWidth(220);
-    typographyDock->setWidget(typographyPanel_);
-    addDockWidget(Qt::RightDockWidgetArea, typographyDock);
+    layerDock_ = new LayerDock();
+    layersDock_->setWidget(wrapPanel(layerDock_, 240));
 
-    auto* shapeDock = new QDockWidget(tr("Shape"), this);
-    shapeDock->setObjectName(QStringLiteral("shapeDock"));
-    shapeDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    shapeDock->setFeatures(
-        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
+    typographyDock_ = makePanelDock(
+        tr("Typography"), QStringLiteral("typographyDock"), this
     );
-    shapePropertiesPanel_ = new ShapePropertiesPanel(shapeDock);
-    shapePropertiesPanel_->setMinimumWidth(220);
-    shapeDock->setWidget(shapePropertiesPanel_);
-    addDockWidget(Qt::RightDockWidgetArea, shapeDock);
+    typographyPanel_ = new TypographyPanel();
+    typographyDock_->setWidget(wrapPanel(typographyPanel_, 240));
 
-    resizeDocks({dock, typographyDock, shapeDock}, {280, 280, 280}, Qt::Horizontal);
+    shapeDock_ = makePanelDock(
+        tr("Shape"), QStringLiteral("shapeDock"), this
+    );
+    shapePropertiesPanel_ = new ShapePropertiesPanel();
+    shapeDock_->setWidget(wrapPanel(shapePropertiesPanel_, 240));
+}
+
+void MainWindow::arrangeDefaultWorkspace() {
+    removeDockWidget(layersDock_);
+    removeDockWidget(typographyDock_);
+    removeDockWidget(shapeDock_);
+
+    layersDock_->show();
+    typographyDock_->show();
+    shapeDock_->show();
+
+    addDockWidget(Qt::RightDockWidgetArea, layersDock_);
+    addDockWidget(Qt::RightDockWidgetArea, typographyDock_);
+    addDockWidget(Qt::RightDockWidgetArea, shapeDock_);
+
+    // Layers stays on top; the two layer-specific panels share the space below
+    // as tabs so they never overlap at small window heights.
+    tabifyDockWidget(typographyDock_, shapeDock_);
+    typographyDock_->raise();
+
+    resizeDocks({layersDock_, typographyDock_}, {320, 360}, Qt::Vertical);
+    resizeDocks({layersDock_}, {300}, Qt::Horizontal);
+}
+
+void MainWindow::restoreWorkspace() {
+    if (QApplication::applicationName() != QStringLiteral("Glyma")) {
+        return;
+    }
+    QSettings settings;
+    if (!settings.contains(QStringLiteral("workspace/state"))) {
+        return;
+    }
+    restoreGeometry(settings.value(QStringLiteral("workspace/geometry")).toByteArray());
+    restoreState(settings.value(QStringLiteral("workspace/state")).toByteArray());
+}
+
+void MainWindow::saveWorkspace() {
+    if (QApplication::applicationName() != QStringLiteral("Glyma")) {
+        return;
+    }
+    QSettings settings;
+    settings.setValue(QStringLiteral("workspace/geometry"), saveGeometry());
+    settings.setValue(QStringLiteral("workspace/state"), saveState());
+}
+
+void MainWindow::resetWorkspace() {
+    arrangeDefaultWorkspace();
+    if (QApplication::applicationName() == QStringLiteral("Glyma")) {
+        QSettings settings;
+        settings.remove(QStringLiteral("workspace"));
+    }
 }
 
 void MainWindow::connectSignals() {
@@ -929,6 +1139,8 @@ void MainWindow::connectSignals() {
     connect(shapePropertiesPanel_, &ShapePropertiesPanel::rasterizeRequested, this, [this] {
         controller_.rasterizeShapeLayer(controller_.selectedLayerId());
     });
+
+    connect(resetWorkspaceAction_, &QAction::triggered, this, &MainWindow::resetWorkspace);
 }
 
 void MainWindow::applyStyle() {
@@ -1001,6 +1213,45 @@ void MainWindow::applyStyle() {
             background-color: #26262a;
             padding: 6px 8px;
             border-bottom: 1px solid #343438;
+        }
+        QTabBar::tab {
+            background-color: #26262a;
+            color: #b6b6bb;
+            padding: 6px 12px;
+            border: 1px solid #343438;
+            border-bottom: none;
+        }
+        QTabBar::tab:selected {
+            background-color: #2f2f34;
+            color: #ffffff;
+        }
+        QTabBar::tab:hover {
+            background-color: #35353a;
+        }
+        QToolBar#toolsToolBar {
+            background-color: #26262a;
+            border: none;
+            border-right: 1px solid #343438;
+            spacing: 4px;
+            padding: 6px 4px;
+        }
+        QToolBar#toolOptionsToolBar {
+            background-color: #26262a;
+            border: none;
+            border-bottom: 1px solid #343438;
+            spacing: 6px;
+            padding: 5px 8px;
+        }
+        QLabel#toolOptionsHint {
+            color: #a8a8ad;
+            padding: 2px 4px;
+        }
+        QScrollArea#panelScroll {
+            background-color: transparent;
+            border: none;
+        }
+        QScrollArea#panelScroll > QWidget > QWidget {
+            background-color: transparent;
         }
         QListWidget {
             background-color: #242427;
@@ -1201,7 +1452,11 @@ void MainWindow::updateColorButton() {
     painter.setBrush(brushColor_);
     painter.drawRect(1, 1, 15, 15);
     painter.end();
-    colorButton_->setIcon(QIcon(swatch));
+    const QIcon swatchIcon(swatch);
+    colorButton_->setIcon(swatchIcon);
+    if (fillColorButton_ != nullptr) {
+        fillColorButton_->setIcon(swatchIcon);
+    }
 }
 
 void MainWindow::chooseBrushColor() {
@@ -1226,6 +1481,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         event->ignore();
         return;
     }
+    saveWorkspace();
     event->accept();
 }
 
