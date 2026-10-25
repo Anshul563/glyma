@@ -32,6 +32,7 @@
 #include <QToolBar>
 #include <QToolButton>
 
+#include "glyma/app/adjustment_dialog.hpp"
 #include "glyma/app/canvas_view.hpp"
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/qt_image.hpp"
@@ -146,6 +147,13 @@ void MainWindow::createActions() {
         this, tr("&About Glyma"), QKeySequence(), QStringLiteral("actionHelpAbout")
     );
 
+    imageAdjustmentsAction_ = makeAction(
+        this,
+        tr("A&djustments..."),
+        QKeySequence(QStringLiteral("Ctrl+M")),
+        QStringLiteral("actionImageAdjustments")
+    );
+
     newAction_->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
     openAction_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
     saveAction_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
@@ -165,6 +173,7 @@ void MainWindow::createActions() {
     connect(zoomOutAction_, &QAction::triggered, canvas_, &CanvasView::zoomOut);
     connect(fitAction_, &QAction::triggered, canvas_, &CanvasView::fitToWindow);
     connect(resetZoomAction_, &QAction::triggered, canvas_, &CanvasView::resetZoom);
+    connect(imageAdjustmentsAction_, &QAction::triggered, this, [this] { onAdjustments(); });
     connect(aboutAction_, &QAction::triggered, this, [this] { onAbout(); });
 }
 
@@ -190,6 +199,9 @@ void MainWindow::createMenus() {
     viewMenu->addSeparator();
     viewMenu->addAction(fitAction_);
     viewMenu->addAction(resetZoomAction_);
+
+    QMenu* imageMenu = menuBar()->addMenu(tr("&Image"));
+    imageMenu->addAction(imageAdjustmentsAction_);
 
     QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(aboutAction_);
@@ -786,6 +798,7 @@ void MainWindow::chooseBrushColor() {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     controller_.endBrushStroke();
+    controller_.cancelAdjustment();
     controller_.cancelSelection();
     if (!prepareForDestructiveAction()) {
         event->ignore();
@@ -1025,6 +1038,35 @@ void MainWindow::onExportPng() {
         statusBar()->showMessage(
             tr("Exported %1").arg(QFileInfo(path).fileName()), 3000
         );
+    }
+}
+
+void MainWindow::onAdjustments() {
+    if (!controller_.beginAdjustment()) {
+        showError(tr("Select a visible layer to adjust."));
+        return;
+    }
+
+    AdjustmentDialog dialog(this);
+    dialog.setSettings(controller_.adjustmentSettings());
+    connect(
+        &dialog,
+        &AdjustmentDialog::settingsChanged,
+        this,
+        [this](const core::AdjustmentSettings& settings) {
+            controller_.updateAdjustment(settings);
+        }
+    );
+
+    const int result = dialog.exec();
+    if (result == QDialog::Accepted) {
+        if (controller_.applyAdjustment()) {
+            statusBar()->showMessage(tr("Applied adjustments."), 3000);
+        } else {
+            statusBar()->showMessage(tr("No changes to apply."), 3000);
+        }
+    } else {
+        controller_.cancelAdjustment();
     }
 }
 

@@ -77,9 +77,11 @@ remains Qt-independent; the application layer owns the active `Document`, its
 - Rectangle and ellipse selection tools with clear/invert actions, plus a
   bucket fill tool with tolerance and opacity controls that fills with the
   foreground color.
-- Undo/redo for brush/eraser strokes, selection changes, bucket fills, and layer
-  add/remove/reorder/rename, visibility, and opacity changes through the engine
-  command history.
+- Image adjustments (exposure, brightness, contrast, saturation, grayscale,
+  gaussian blur, and sharpen) in a live-preview dialog under the Image menu.
+- Undo/redo for brush/eraser strokes, selection changes, bucket fills,
+  image adjustments, and layer add/remove/reorder/rename, visibility, and
+  opacity changes through the engine command history.
 - Dark neutral Qt stylesheet with a neutral workspace around the canvas.
 
 File and Edit actions use the existing engine serialization, PNG, and
@@ -132,6 +134,31 @@ The selection model lives in `include/glyma/core/selection.hpp` and
   blending uses the same straight-alpha source-over model as the brush.
 - A selection change and a bucket fill are each one command-history entry,
   storing the previous selection or the sparse set of changed pixels.
+
+## Image Adjustments and Filters
+
+The adjustment engine lives in `include/glyma/core/adjustments.hpp` and
+`src/engine/adjustments.cpp`; the destructive-edit command lives in
+`include/glyma/core/pixel_edit.hpp` and `src/engine/pixel_edit.cpp`. All are
+Qt-independent. The dialog lives in
+`include/glyma/app/adjustment_dialog.hpp` and `src/app/adjustment_dialog.cpp`.
+
+- `Adjustments...` (`Ctrl+M`) in the Image menu opens a live-preview dialog for
+  the selected visible layer. Controls are exposure (-4 to +4 EV), brightness,
+  contrast, and saturation (-100% to +100%), grayscale, gaussian blur radius
+  (0-50 px), and sharpen amount (0-200%). `Reset` restores the defaults;
+  cancelling restores the original pixels; accepting commits one undoable edit.
+- Adjustments apply in a fixed order: exposure, brightness, contrast,
+  saturation, grayscale, blur, sharpen. The preview is recomputed from a
+  snapshot on every change, so it never compounds.
+- Operations are tonal approximations in the encoded (non-linear) pixel space
+  and are not color-managed. Luminance uses the Rec. 601 weights
+  (0.299/0.587/0.114). Alpha is preserved throughout; blur and sharpen operate
+  on premultiplied alpha to avoid color fringing in transparent regions.
+- Adjustments respect the active selection: only selected pixels are changed.
+  A committed adjustment is one command-history entry that stores the smaller of
+  a sparse pixel-diff or a before/after buffer snapshot, so undo and redo are
+  exact without always paying for a full-document copy.
 
 ## PNG Import/Export
 
@@ -222,6 +249,8 @@ Undo/redo history is session-only and is not serialized.
 
 - No JPEG/WebP/SVG/PSD support.
 - No transformations or GPU rendering.
+- Adjustments are basic and destructive (pixels are baked on commit); there are
+  no curves, levels, or per-channel controls.
 - No textured brushes, pressure sensitivity, brush dynamics, or advanced brush
   presets.
 - No layer blending modes, duplication, merging, grouping, or drag-and-drop

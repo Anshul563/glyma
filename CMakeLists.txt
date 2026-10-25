@@ -43,6 +43,8 @@ add_library(glyma_core STATIC
     src/engine/brush_engine.cpp
     src/engine/selection.cpp
     src/engine/fill.cpp
+    src/engine/adjustments.cpp
+    src/engine/pixel_edit.cpp
     src/io/png_reader.cpp
     src/io/png_writer.cpp
     src/io/document_io.cpp
@@ -92,12 +94,14 @@ if(GLYMA_BUILD_APP)
     )
 
     add_library(glyma_app_ui STATIC
+        include/glyma/app/adjustment_dialog.hpp
         include/glyma/app/app_controller.hpp
         include/glyma/app/canvas_view.hpp
         include/glyma/app/document_lifecycle.hpp
         include/glyma/app/layer_dock.hpp
         include/glyma/app/main_window.hpp
         include/glyma/app/qt_image.hpp
+        src/app/adjustment_dialog.cpp
         src/app/app_controller.cpp
         src/app/canvas_view.cpp
         src/app/document_lifecycle.cpp
@@ -161,6 +165,14 @@ if(BUILD_TESTING)
         tests/fill_tests.cpp
     )
 
+    add_executable(glyma_adjustments_tests
+        tests/adjustments_tests.cpp
+    )
+
+    add_executable(glyma_pixel_edit_tests
+        tests/pixel_edit_tests.cpp
+    )
+
     target_link_libraries(glyma_tests PRIVATE glyma_core)
     target_link_libraries(glyma_layer_tests PRIVATE glyma_core)
     target_link_libraries(glyma_document_tests PRIVATE glyma_core)
@@ -170,6 +182,8 @@ if(BUILD_TESTING)
     target_link_libraries(glyma_brush_tests PRIVATE glyma_core)
     target_link_libraries(glyma_selection_tests PRIVATE glyma_core)
     target_link_libraries(glyma_fill_tests PRIVATE glyma_core)
+    target_link_libraries(glyma_adjustments_tests PRIVATE glyma_core)
+    target_link_libraries(glyma_pixel_edit_tests PRIVATE glyma_core)
 
     target_compile_options(glyma_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_layer_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -180,6 +194,8 @@ if(BUILD_TESTING)
     target_compile_options(glyma_brush_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_selection_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_fill_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(glyma_adjustments_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(glyma_pixel_edit_tests PRIVATE -Wall -Wextra -Wpedantic)
 
     add_test(
         NAME glyma_image_buffer_tests
@@ -224,6 +240,16 @@ if(BUILD_TESTING)
     add_test(
         NAME glyma_selection_tests
         COMMAND glyma_selection_tests
+    )
+
+    add_test(
+        NAME glyma_adjustments_tests
+        COMMAND glyma_adjustments_tests
+    )
+
+    add_test(
+        NAME glyma_pixel_edit_tests
+        COMMAND glyma_pixel_edit_tests
     )
 
     add_test(

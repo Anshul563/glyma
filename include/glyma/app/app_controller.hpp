@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 
+#include "glyma/core/adjustments.hpp"
 #include "glyma/core/brush.hpp"
 #include "glyma/core/brush_engine.hpp"
 #include "glyma/core/command_history.hpp"
@@ -71,6 +72,26 @@ public:
     // non-empty fill was recorded as one undoable command.
     bool bucketFill(double documentX, double documentY);
 
+    // Adjustment session API (destructive raster edits with live preview).
+    //
+    // A session starts from a stable snapshot of the selected layer. Each
+    // update recomputes the preview from that snapshot (never from the previous
+    // preview, so repeated slider changes do not accumulate), applies it to the
+    // document for display, and records nothing in history. Apply commits the
+    // current result as exactly one undoable command; cancel restores the
+    // snapshot and leaves history untouched.
+    [[nodiscard]] bool isAdjusting() const noexcept;
+    [[nodiscard]] const core::AdjustmentSettings& adjustmentSettings() const noexcept;
+    // Snapshot the selected visible layer. Returns false when no suitable layer
+    // is selected or a session is already active.
+    bool beginAdjustment();
+    bool updateAdjustment(const core::AdjustmentSettings& settings);
+    // Commit the preview as one command. Returns false (without touching
+    // history) when nothing changed.
+    bool applyAdjustment();
+    // Discard the preview, restoring the layer exactly.
+    void cancelAdjustment();
+
     bool newDocument(
         const QString& name,
         std::uint32_t width,
@@ -113,6 +134,7 @@ private:
     void ensureSelection();
     void emitDocumentState(bool selectionMayHaveChanged);
     void refreshModifiedState();
+    void discardAdjustment();
     [[nodiscard]] std::string nextLayerName() const;
 
     std::unique_ptr<core::Document> document_;
@@ -128,6 +150,10 @@ private:
     double dragStartY_{0.0};
     core::CommandHistory history_;
     core::FillSettings fillSettings_;
+    std::unique_ptr<core::ImageBuffer> adjustmentBase_;
+    core::LayerId adjustmentLayerId_{core::Layer::invalidId};
+    core::AdjustmentSettings adjustmentSettings_;
+    bool adjusting_{false};
     core::LayerId selectedLayerId_{core::Layer::invalidId};
     QString filePath_;
     std::uint64_t savedRevision_{0};

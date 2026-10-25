@@ -55,6 +55,7 @@ private:
     void onSave();
     void onSaveAs();
     void onExportPng();
+    void onAdjustments();
     void onAbout();
 
     [[nodiscard]] bool prepareForDestructiveAction();
@@ -81,6 +82,7 @@ private:
     QAction* zoomOutAction_{nullptr};
     QAction* fitAction_{nullptr};
     QAction* resetZoomAction_{nullptr};
+    QAction* imageAdjustmentsAction_{nullptr};
     QAction* aboutAction_{nullptr};
 
     QActionGroup* toolGroup_{nullptr};

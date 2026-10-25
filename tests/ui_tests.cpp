@@ -5,19 +5,23 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QColor>
 #include <QFileInfo>
 #include <QImage>
 #include <QListWidget>
+#include <QSlider>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QToolButton>
 #include <QtGlobal>
 
+#include "glyma/app/adjustment_dialog.hpp"
 #include "glyma/app/canvas_view.hpp"
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/main_window.hpp"
 #include "glyma/app/qt_image.hpp"
+#include "glyma/core/adjustments.hpp"
 #include "glyma/core/document.hpp"
 #include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
@@ -25,10 +29,12 @@
 
 namespace {
 
+using glyma::app::AdjustmentDialog;
 using glyma::app::AppController;
 using glyma::app::CanvasView;
 using glyma::app::MainWindow;
 using glyma::app::toQImage;
+using glyma::core::AdjustmentSettings;
 using glyma::core::BrushMode;
 using glyma::core::BrushSettings;
 using glyma::core::Document;
@@ -667,6 +673,117 @@ void testSelectionOverlayDoesNotModifyPixels() {
     assert(document.layerStack().layers().front().buffer().pixels() == before);
 }
 
+void testMainWindowAdjustmentAction() {
+    MainWindow window;
+    auto* action = window.findChild<QAction*>(QStringLiteral("actionImageAdjustments"));
+    assert(action != nullptr);
+    assert(action->isEnabled());
+    assert(!action->shortcut().isEmpty());
+}
+
+void testAdjustmentDialogControls() {
+    AdjustmentDialog dialog;
+
+    auto* brightness = dialog.findChild<QSlider*>(QStringLiteral("adjustBrightnessSlider"));
+    auto* blur = dialog.findChild<QSlider*>(QStringLiteral("adjustBlurSlider"));
+    auto* grayscale = dialog.findChild<QCheckBox*>(QStringLiteral("adjustGrayscaleCheck"));
+    assert(brightness != nullptr);
+    assert(blur != nullptr);
+    assert(grayscale != nullptr);
+
+    int emitted = 0;
+    AdjustmentSettings last;
+    QObject::connect(
+        &dialog, &AdjustmentDialog::settingsChanged,
+        [&](const AdjustmentSettings& settings) {
+            ++emitted;
+            last = settings;
+        }
+    );
+
+    assert(dialog.settings().isDefault());
+
+    brightness->setValue(50);
+    assert(emitted == 1);
+    assert(std::abs(last.brightness - 0.5F) < 1e-6F);
+
+    grayscale->setChecked(true);
+    assert(emitted == 2);
+    assert(last.grayscale);
+
+    // setSettings must not re-emit (signals blocked during programmatic update).
+    AdjustmentSettings custom = dialog.settings();
+    dialog.setSettings(custom);
+    assert(emitted == 2);
+    assert(dialog.settings().grayscale);
+
+    // Programmatic reset also stays silent; state returns to defaults.
+    dialog.setSettings(AdjustmentSettings{});
+    assert(emitted == 2);
+    assert(dialog.settings().isDefault());
+}
+
+void testControllerAdjustmentIntegration() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Adjust"), 6, 6));
+    const LayerId id = controller.selectedLayerId();
+    Layer* layer = controller.document().findLayer(id);
+    assert(layer != nullptr);
+    layer->buffer().clear(Pixel{100, 100, 100, 255});
+    assert(!controller.canUndo());
+
+    assert(controller.beginAdjustment());
+    assert(controller.isAdjusting());
+    assert(layer->buffer().getPixel(0, 0) == (Pixel{100, 100, 100, 255}));
+
+    AdjustmentSettings settings;
+    settings.brightness = 0.5F;
+    assert(controller.updateAdjustment(settings));
+    assert(controller.adjustmentSettings().brightness == settings.brightness);
+    // Preview must not push history.
+    assert(!controller.canUndo());
+    const Pixel preview = layer->buffer().getPixel(0, 0);
+    assert(preview != (Pixel{100, 100, 100, 255}));
+
+    assert(controller.applyAdjustment());
+    assert(!controller.isAdjusting());
+    assert(controller.canUndo());
+    assert(layer->buffer().getPixel(0, 0) == preview);
+
+    assert(controller.undo());
+    assert(layer->buffer().getPixel(0, 0) == (Pixel{100, 100, 100, 255}));
+
+    assert(controller.redo());
+    assert(layer->buffer().getPixel(0, 0) == preview);
+}
+
+void testControllerAdjustmentCancelRestores() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Cancel"), 4, 4));
+    const LayerId id = controller.selectedLayerId();
+    Layer* layer = controller.document().findLayer(id);
+    assert(layer != nullptr);
+    layer->buffer().clear(Pixel{40, 80, 120, 255});
+
+    assert(controller.beginAdjustment());
+    AdjustmentSettings settings;
+    settings.saturation = -1.0F;
+    settings.blurSigma = 2.0F;
+    assert(controller.updateAdjustment(settings));
+    assert(layer->buffer().getPixel(1, 1) != (Pixel{40, 80, 120, 255}));
+
+    controller.cancelAdjustment();
+    assert(!controller.isAdjusting());
+    assert(layer->buffer().getPixel(1, 1) == (Pixel{40, 80, 120, 255}));
+    assert(!controller.canUndo());
+
+    // Identity settings produce no command on apply.
+    assert(controller.beginAdjustment());
+    assert(controller.updateAdjustment(AdjustmentSettings{}));
+    assert(!controller.applyAdjustment());
+    assert(!controller.canUndo());
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -695,6 +812,10 @@ int main(int argc, char* argv[]) {
     testControllerSelectionIntegration();
     testBucketFillIntegration();
     testSelectionOverlayDoesNotModifyPixels();
+    testMainWindowAdjustmentAction();
+    testAdjustmentDialogControls();
+    testControllerAdjustmentIntegration();
+    testControllerAdjustmentCancelRestores();
     testControllerFailurePaths();
     testControllerFileOperations();
 

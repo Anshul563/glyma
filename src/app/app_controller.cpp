@@ -10,6 +10,7 @@
 #include <QFileInfo>
 
 #include "glyma/core/commands.hpp"
+#include "glyma/core/pixel_edit.hpp"
 #include "glyma/io/document_io.hpp"
 #include "glyma/io/png_reader.hpp"
 #include "glyma/io/project_reader.hpp"
@@ -335,6 +336,127 @@ bool AppController::bucketFill(double documentX, double documentY) {
     return true;
 }
 
+bool AppController::isAdjusting() const noexcept {
+    return adjusting_;
+}
+
+const core::AdjustmentSettings& AppController::adjustmentSettings() const noexcept {
+    return adjustmentSettings_;
+}
+
+bool AppController::beginAdjustment() {
+    if (adjusting_) {
+        discardAdjustment();
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+
+    core::Layer* layer = document_->findLayer(selectedLayerId_);
+    if (layer == nullptr || !layer->visible()) {
+        return false;
+    }
+
+    adjustmentBase_ = std::make_unique<core::ImageBuffer>(layer->buffer());
+    adjustmentLayerId_ = layer->id();
+    adjustmentSettings_ = {};
+    adjusting_ = true;
+    return true;
+}
+
+bool AppController::updateAdjustment(const core::AdjustmentSettings& settings) {
+    if (!adjusting_ || !adjustmentBase_) {
+        return false;
+    }
+    if (!settings.isValid()) {
+        return false;
+    }
+
+    core::Layer* layer = document_->findLayer(adjustmentLayerId_);
+    if (layer == nullptr) {
+        discardAdjustment();
+        return false;
+    }
+
+    const core::SelectionMask mask{
+        &document_->selection(),
+        static_cast<double>(layer->x()),
+        static_cast<double>(layer->y())
+    };
+
+    std::unique_ptr<core::ImageBuffer> result;
+    try {
+        result = core::processImage(*adjustmentBase_, settings, mask);
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    layer->buffer() = std::move(*result);
+    adjustmentSettings_ = settings;
+    emit documentChanged();
+    return true;
+}
+
+bool AppController::applyAdjustment() {
+    if (!adjusting_ || !adjustmentBase_) {
+        return false;
+    }
+
+    core::Layer* layer = document_->findLayer(adjustmentLayerId_);
+    if (layer == nullptr) {
+        discardAdjustment();
+        return false;
+    }
+
+    std::unique_ptr<core::PixelEditCommand> command;
+    try {
+        command = core::makePixelEditCommand(
+            adjustmentLayerId_, *adjustmentBase_, layer->buffer()
+        );
+    } catch (const std::exception&) {
+        command.reset();
+    }
+
+    // The preview has already been applied to the layer, so the command is
+    // recorded as executed rather than re-applied.
+    adjustmentBase_.reset();
+    adjustmentLayerId_ = core::Layer::invalidId;
+    adjustmentSettings_ = {};
+    adjusting_ = false;
+
+    if (!command) {
+        // Nothing changed; the layer already matches the original snapshot.
+        emit documentChanged();
+        return false;
+    }
+
+    if (!history_.pushExecuted(std::move(command))) {
+        emit documentChanged();
+        return false;
+    }
+    emitDocumentState(false);
+    return true;
+}
+
+void AppController::cancelAdjustment() {
+    if (!adjusting_) {
+        return;
+    }
+    core::Layer* layer = document_->findLayer(adjustmentLayerId_);
+    if (layer != nullptr && adjustmentBase_) {
+        layer->buffer() = std::move(*adjustmentBase_);
+    }
+    discardAdjustment();
+    emit documentChanged();
+}
+
+void AppController::discardAdjustment() {
+    adjustmentBase_.reset();
+    adjustmentLayerId_ = core::Layer::invalidId;
+    adjustmentSettings_ = {};
+    adjusting_ = false;
+}
+
 void AppController::installDocument(
     std::unique_ptr<core::Document> document,
     const QString& path,
@@ -344,6 +466,7 @@ void AppController::installDocument(
         (void)cancelBrushStroke();
     }
     cancelSelection();
+    discardAdjustment();
     document_ = std::move(document);
     filePath_ = path;
     history_.clear();
@@ -503,6 +626,7 @@ bool AppController::save(const QString& path) {
         (void)endBrushStroke();
     }
     cancelSelection();
+    cancelAdjustment();
     if (path.isEmpty()) {
         emit errorOccurred(tr("No save path was provided."));
         return false;
@@ -527,6 +651,7 @@ bool AppController::exportPng(const QString& path) {
         (void)endBrushStroke();
     }
     cancelSelection();
+    cancelAdjustment();
     if (path.isEmpty()) {
         emit errorOccurred(tr("No export path was provided."));
         return false;
@@ -546,6 +671,7 @@ bool AppController::undo() {
         (void)endBrushStroke();
     }
     cancelSelection();
+    cancelAdjustment();
     if (!history_.undo(*document_)) {
         return false;
     }
@@ -559,6 +685,7 @@ bool AppController::redo() {
         (void)endBrushStroke();
     }
     cancelSelection();
+    cancelAdjustment();
     if (!history_.redo(*document_)) {
         return false;
     }
