@@ -8,15 +8,18 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFont>
 #include <QFontComboBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QTextCursor>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -75,6 +78,7 @@ void TypographyPanel::buildUi() {
     content_->setObjectName(QStringLiteral("textContentEdit"));
     content_->setPlaceholderText(tr("Type your text"));
     content_->setFixedHeight(72);
+    content_->installEventFilter(this);
     layout->addWidget(content_);
 
     auto* form = new QFormLayout();
@@ -255,7 +259,14 @@ void TypographyPanel::setTextData(const core::TextLayerData* data) {
 
     hasLayer_ = data != nullptr;
     if (data != nullptr) {
-        content_->setPlainText(QString::fromStdString(data->text));
+        // Only rewrite the editor when the text actually changed. Reloading the
+        // same payload (for example after a live edit round-trips through the
+        // controller) would otherwise reset the caret to the start and destroy
+        // the user's selection mid-typing.
+        const QString incoming = QString::fromStdString(data->text);
+        if (content_->toPlainText() != incoming) {
+            content_->setPlainText(incoming);
+        }
         family_->setCurrentFont(QFont(QString::fromStdString(data->style.fontFamily)));
         size_->setValue(static_cast<double>(data->style.fontSize));
         weight_->setCurrentIndex(weightIndexFor(data->style.fontWeight));
@@ -339,6 +350,37 @@ void TypographyPanel::chooseColor() {
     color_ = chosen;
     updateColorButton();
     emitEdited();
+}
+
+void TypographyPanel::focusEditor(bool selectAll) {
+    if (content_ == nullptr) {
+        return;
+    }
+    content_->setFocus(Qt::OtherFocusReason);
+    if (selectAll) {
+        content_->selectAll();
+    } else {
+        QTextCursor cursor = content_->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        content_->setTextCursor(cursor);
+    }
+}
+
+bool TypographyPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == content_) {
+        if (event->type() == QEvent::KeyPress) {
+            auto* keyEvent = static_cast<QKeyEvent*>(event);
+            if (keyEvent->key() == Qt::Key_Escape) {
+                emit editingCancelled();
+                return true;
+            }
+        } else if (event->type() == QEvent::FocusIn) {
+            emit editorFocusChanged(true);
+        } else if (event->type() == QEvent::FocusOut) {
+            emit editorFocusChanged(false);
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void TypographyPanel::updateColorButton() {

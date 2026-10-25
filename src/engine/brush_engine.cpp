@@ -163,6 +163,7 @@ BrushStroke::~BrushStroke() {
 }
 
 bool BrushStroke::start(double x, double y) {
+    resetDirty();
     if (!active_ || !isUsableCoordinate(x) || !isUsableCoordinate(y)) {
         return false;
     }
@@ -173,6 +174,7 @@ bool BrushStroke::start(double x, double y) {
 }
 
 bool BrushStroke::lineTo(double x, double y) {
+    resetDirty();
     if (!active_ || !hasLast_ || !isUsableCoordinate(x) ||
         !isUsableCoordinate(y)) {
         return false;
@@ -272,6 +274,50 @@ const BrushSettings& BrushStroke::settings() const noexcept {
     return settings_;
 }
 
+void BrushStroke::resetDirty() noexcept {
+    dirtyValid_ = false;
+    dirtyMinX_ = 0;
+    dirtyMinY_ = 0;
+    dirtyMaxX_ = 0;
+    dirtyMaxY_ = 0;
+}
+
+void BrushStroke::expandDirty(long long pixelX, long long pixelY) noexcept {
+    if (!dirtyValid_) {
+        dirtyValid_ = true;
+        dirtyMinX_ = pixelX;
+        dirtyMaxX_ = pixelX;
+        dirtyMinY_ = pixelY;
+        dirtyMaxY_ = pixelY;
+        return;
+    }
+    dirtyMinX_ = std::min(dirtyMinX_, pixelX);
+    dirtyMinY_ = std::min(dirtyMinY_, pixelY);
+    dirtyMaxX_ = std::max(dirtyMaxX_, pixelX);
+    dirtyMaxY_ = std::max(dirtyMaxY_, pixelY);
+}
+
+PixelRegion BrushStroke::lastDirtyRegion() const noexcept {
+    if (!dirtyValid_ || buffer_ == nullptr) {
+        return {};
+    }
+    const long long width = static_cast<long long>(buffer_->width());
+    const long long height = static_cast<long long>(buffer_->height());
+    const long long minX = std::clamp(dirtyMinX_, 0LL, width - 1);
+    const long long minY = std::clamp(dirtyMinY_, 0LL, height - 1);
+    const long long maxX = std::clamp(dirtyMaxX_, 0LL, width - 1);
+    const long long maxY = std::clamp(dirtyMaxY_, 0LL, height - 1);
+    if (maxX < minX || maxY < minY) {
+        return {};
+    }
+    return PixelRegion{
+        static_cast<std::uint32_t>(minX),
+        static_cast<std::uint32_t>(minY),
+        static_cast<std::uint32_t>(maxX - minX + 1),
+        static_cast<std::uint32_t>(maxY - minY + 1)
+    };
+}
+
 double BrushStroke::coverageAt(
     double x,
     double y,
@@ -369,6 +415,7 @@ bool BrushStroke::stamp(double x, double y) {
                 pending.coverage = coverage;
                 pending.after = after;
                 buffer_->setPixel(pixelX, pixelY, after);
+                expandDirty(px, py);
                 changed = changed || after != before;
                 continue;
             }
@@ -387,6 +434,7 @@ bool BrushStroke::stamp(double x, double y) {
             changePositions_.emplace(index, changes_.size());
             changes_.push_back(PendingChange{index, before, after, coverage});
             buffer_->setPixel(pixelX, pixelY, after);
+            expandDirty(px, py);
             changed = true;
         }
     }

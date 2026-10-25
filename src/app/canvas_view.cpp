@@ -4,7 +4,6 @@
 #include <cmath>
 
 #include <QGraphicsItem>
-#include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QImage>
 #include <QKeyEvent>
@@ -13,6 +12,7 @@
 #include <QPainterPath>
 #include <QPen>
 #include <QPixmap>
+#include <QRect>
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QShowEvent>
@@ -22,6 +22,73 @@
 #include "glyma/app/shape_renderer.hpp"
 
 namespace glyma::app {
+
+// Snapshot image item. Unlike QGraphicsPixmapItem, this exposes an incremental
+// patch operation that repaints only the touched region: the owned QPixmap is
+// modified in place (no copy-on-write detach, since the item paints it itself)
+// and only that rectangle is marked dirty, so brush strokes do not force a full
+// canvas re-upload and repaint on every pointer move.
+class CanvasImageItem : public QGraphicsItem {
+public:
+    CanvasImageItem() {
+        setZValue(0.0);
+        setAcceptedMouseButtons(Qt::NoButton);
+    }
+
+    void setImage(const QImage& image) {
+        prepareGeometryChange();
+        pixmap_ = image.isNull() ? QPixmap() : QPixmap::fromImage(image);
+        size_ = image.size();
+        hasImage_ = !image.isNull();
+        update();
+    }
+
+    void patchImage(const QRect& region, const QImage& subImage) {
+        if (!hasImage_ || subImage.isNull() || region.isEmpty()) {
+            return;
+        }
+        const QRect clipped = region.intersected(
+            QRect(0, 0, size_.width(), size_.height())
+        );
+        if (clipped.isEmpty()) {
+            return;
+        }
+        QPainter painter(&pixmap_);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.drawImage(clipped.topLeft(), subImage);
+        painter.end();
+        update(QRectF(clipped));
+    }
+
+    void clear() {
+        prepareGeometryChange();
+        pixmap_ = QPixmap();
+        size_ = QSize();
+        hasImage_ = false;
+        update();
+    }
+
+    [[nodiscard]] QRectF boundingRect() const override {
+        return QRectF(0, 0, size_.width(), size_.height());
+    }
+
+    void paint(
+        QPainter* painter,
+        const QStyleOptionGraphicsItem*,
+        QWidget*
+    ) override {
+        if (!hasImage_) {
+            return;
+        }
+        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter->drawPixmap(QPointF(0.0, 0.0), pixmap_);
+    }
+
+private:
+    QPixmap pixmap_;
+    QSize size_;
+    bool hasImage_{false};
+};
 
 class CheckerboardItem : public QGraphicsItem {
 public:
@@ -309,9 +376,7 @@ CanvasView::CanvasView(QWidget* parent)
     checkerboard_ = new CheckerboardItem();
     scene_->addItem(checkerboard_);
 
-    pixmapItem_ = new QGraphicsPixmapItem();
-    pixmapItem_->setTransformationMode(Qt::SmoothTransformation);
-    pixmapItem_->setZValue(0.0);
+    pixmapItem_ = new CanvasImageItem();
     scene_->addItem(pixmapItem_);
 
     selectionItem_ = new SelectionItem(core::Selection{});
@@ -366,6 +431,7 @@ void CanvasView::setImage(const QImage& image) {
     if (image.isNull()) {
         imageSize_ = {};
         checkerboard_->hide();
+        pixmapItem_->clear();
         pixmapItem_->hide();
         scene_->setSceneRect(QRectF());
         clearCrop();
@@ -380,7 +446,7 @@ void CanvasView::setImage(const QImage& image) {
     }
 
     imageSize_ = image.size();
-    pixmapItem_->setPixmap(QPixmap::fromImage(image));
+    pixmapItem_->setImage(image);
     pixmapItem_->setPos(0, 0);
     pixmapItem_->show();
     checkerboard_->setRect(
@@ -397,6 +463,13 @@ void CanvasView::setImage(const QImage& image) {
         applyZoom(fitZoom(imageSize_, viewport()->size()), true);
         centerOn(scene_->sceneRect().center());
     }
+}
+
+void CanvasView::patchImage(const QRect& region, const QImage& subImage) {
+    if (region.isEmpty() || subImage.isNull()) {
+        return;
+    }
+    pixmapItem_->patchImage(region, subImage);
 }
 
 QSize CanvasView::imageSize() const noexcept {
@@ -416,6 +489,7 @@ CanvasView::Tool CanvasView::activeTool() const noexcept {
 }
 
 void CanvasView::setActiveTool(Tool tool) {
+    const bool changed = activeTool_ != tool;
     activeTool_ = tool;
     // A tool change ends any in-progress drag.
     if (selecting_) {
@@ -432,6 +506,9 @@ void CanvasView::setActiveTool(Tool tool) {
     setCursor(tool == Tool::Text ? Qt::IBeamCursor : Qt::CrossCursor);
     selectionItem_->hide();
     updateCropItem();
+    if (changed) {
+        emit toolChanged();
+    }
 }
 
 void CanvasView::setShapeTemplate(const core::ShapeLayerData& shape) {

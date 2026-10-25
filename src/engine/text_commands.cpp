@@ -47,6 +47,15 @@ bool AddTextLayerCommand::undo(Document& document) {
 SetTextDataCommand::SetTextDataCommand(LayerId id, TextLayerData next)
     : targetId_(id), next_(std::move(next)) {}
 
+SetTextDataCommand::SetTextDataCommand(
+    LayerId id,
+    TextLayerData previous,
+    TextLayerData next
+) : targetId_(id),
+    next_(std::move(next)),
+    captured_(true),
+    previous_(std::move(previous)) {}
+
 std::string SetTextDataCommand::name() const {
     return "EditText";
 }

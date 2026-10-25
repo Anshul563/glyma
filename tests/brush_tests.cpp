@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -415,6 +416,82 @@ void testOnlyTargetLayerChanges() {
     assert(top->buffer().pixels() != topBefore.pixels());
 }
 
+void testDirtyRegionTracksChanges() {
+    ImageBuffer buffer(32, 32);
+    BrushStroke stroke(buffer, 1, settings(6.0), BrushMode::Paint);
+
+    // No call yet: nothing dirty.
+    assert(stroke.lastDirtyRegion().isEmpty());
+
+    assert(stroke.start(8.5, 9.5));
+    const glyma::core::PixelRegion first = stroke.lastDirtyRegion();
+    assert(!first.isEmpty());
+
+    // The reported region must exactly bound the pixels that changed.
+    const Pixel untouched{0, 0, 0, 0};
+    int minX = 32;
+    int minY = 32;
+    int maxX = -1;
+    int maxY = -1;
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            if (buffer.getPixel(
+                    static_cast<std::uint32_t>(x),
+                    static_cast<std::uint32_t>(y)
+                ) != untouched) {
+                minX = std::min(minX, x);
+                minY = std::min(minY, y);
+                maxX = std::max(maxX, x);
+                maxY = std::max(maxY, y);
+            }
+        }
+    }
+    assert(maxX >= 0);
+    assert(static_cast<int>(first.x) == minX);
+    assert(static_cast<int>(first.y) == minY);
+    assert(static_cast<int>(first.width) == maxX - minX + 1);
+    assert(static_cast<int>(first.height) == maxY - minY + 1);
+
+    // A later segment reports exactly the pixels changed by that call.
+    const std::vector<Pixel> before = buffer.pixels();
+    assert(stroke.lineTo(24.5, 9.5));
+    const glyma::core::PixelRegion second = stroke.lastDirtyRegion();
+    assert(!second.isEmpty());
+
+    int sMinX = 32;
+    int sMinY = 32;
+    int sMaxX = -1;
+    int sMaxY = -1;
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            const std::size_t index =
+                static_cast<std::size_t>(y) * 32 + static_cast<std::size_t>(x);
+            if (buffer.getPixel(
+                    static_cast<std::uint32_t>(x),
+                    static_cast<std::uint32_t>(y)
+                ) != before[index]) {
+                sMinX = std::min(sMinX, x);
+                sMinY = std::min(sMinY, y);
+                sMaxX = std::max(sMaxX, x);
+                sMaxY = std::max(sMaxY, y);
+            }
+        }
+    }
+    assert(sMaxX >= 0);
+    assert(static_cast<int>(second.x) == sMinX);
+    assert(static_cast<int>(second.y) == sMinY);
+    assert(static_cast<int>(second.width) == sMaxX - sMinX + 1);
+    assert(static_cast<int>(second.height) == sMaxY - sMinY + 1);
+}
+
+void testDirtyRegionEmptyOffCanvas() {
+    ImageBuffer buffer(16, 16);
+    BrushStroke stroke(buffer, 1, settings(4.0), BrushMode::Paint);
+    // A dab entirely outside the buffer changes nothing and reports no region.
+    assert(!stroke.start(-100.0, -100.0));
+    assert(stroke.lastDirtyRegion().isEmpty());
+}
+
 void testDeterminism() {
     const auto run = [] {
         ImageBuffer buffer(24, 24);
@@ -453,6 +530,8 @@ int main() {
     testPushExecutedDiscardsRedoBranch();
     testCancelledStrokeRestoresPixels();
     testOnlyTargetLayerChanges();
+    testDirtyRegionTracksChanges();
+    testDirtyRegionEmptyOffCanvas();
     testDeterminism();
 
     std::cout << "All Glyma brush tests passed!\n";

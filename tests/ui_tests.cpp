@@ -12,6 +12,7 @@
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QImage>
+#include <QKeyEvent>
 #include <QListWidget>
 #include <QMetaObject>
 #include <QPlainTextEdit>
@@ -20,6 +21,7 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTextCursor>
 #include <QToolBar>
 #include <QToolButton>
 #include <QtGlobal>
@@ -1119,6 +1121,238 @@ void testMainWindowTextTool() {
     assert(!controller.document().findLayer(id)->isText());
 }
 
+void testControllerBrushRegionSignal() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Region"), 64, 64));
+
+    int regionCount = 0;
+    int fullCount = 0;
+    int lastX = 0;
+    int lastY = 0;
+    int lastW = 0;
+    int lastH = 0;
+    QObject::connect(
+        &controller,
+        &AppController::documentRegionChanged,
+        [&](int x, int y, int width, int height) {
+            ++regionCount;
+            lastX = x;
+            lastY = y;
+            lastW = width;
+            lastH = height;
+        }
+    );
+    QObject::connect(
+        &controller,
+        &AppController::documentChanged,
+        [&] { ++fullCount; }
+    );
+
+    BrushSettings brush;
+    brush.diameter = 8.0;
+    brush.color = Pixel{255, 0, 0, 255};
+    assert(controller.setBrushSettings(brush));
+
+    assert(controller.beginBrushStroke(20.5, 20.5));
+    assert(regionCount == 1);
+    assert(lastW > 0 && lastH > 0);
+    // The dirty region must contain the dab centre.
+    assert(lastX <= 20 && lastY <= 20);
+    assert(lastX + lastW > 20 && lastY + lastH > 20);
+
+    assert(controller.updateBrushStroke(30.5, 20.5));
+    assert(regionCount == 2);
+    // The incremental stroke must not force a full-document recomposite.
+    assert(fullCount == 0);
+
+    assert(controller.endBrushStroke());
+    // Finishing the stroke does one full state refresh.
+    assert(fullCount >= 1);
+}
+
+void testControllerTextEditSession() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Text"), 64, 64));
+
+    TextLayerData data;
+    data.text = "Hello";
+    data.style.fontSize = 24.0F;
+    assert(controller.addTextLayer(data, 2, 2));
+    const LayerId id = controller.selectedLayerId();
+    assert(controller.textData(id)->text == "Hello");
+
+    // A run of live edits is applied immediately but recorded only on commit.
+    assert(controller.beginTextEdit(id));
+    assert(controller.isEditingText());
+    assert(controller.textEditLayerId() == id);
+
+    TextLayerData edited = *controller.textData(id);
+    edited.text = "H";
+    assert(controller.updateTextData(id, edited));
+    edited.text = "He";
+    assert(controller.updateTextData(id, edited));
+    edited.text = "Hey";
+    assert(controller.updateTextData(id, edited));
+    assert(controller.textData(id)->text == "Hey");
+
+    assert(controller.commitTextEdit());
+    assert(!controller.isEditingText());
+    assert(controller.textData(id)->text == "Hey");
+
+    // A single undo restores the whole typing run, not just the last character.
+    assert(controller.undo());
+    assert(controller.textData(id)->text == "Hello");
+    assert(controller.redo());
+    assert(controller.textData(id)->text == "Hey");
+
+    // Cancel restores the payload captured at beginTextEdit.
+    assert(controller.beginTextEdit(id));
+    TextLayerData discarded = *controller.textData(id);
+    discarded.text = "Nope";
+    assert(controller.updateTextData(id, discarded));
+    assert(controller.textData(id)->text == "Nope");
+    controller.cancelTextEdit();
+    assert(!controller.isEditingText());
+    assert(controller.textData(id)->text == "Hey");
+
+    // Committing an unchanged session records nothing.
+    assert(controller.beginTextEdit(id));
+    assert(!controller.commitTextEdit());
+}
+
+void testTextLayerHitTest() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Hit"), 64, 64));
+
+    TextLayerData data;
+    data.text = "X";
+    data.style.fontSize = 32.0F;
+    assert(controller.addTextLayer(data, 5, 5));
+    const LayerId id = controller.selectedLayerId();
+
+    const Layer* layer = controller.document().findLayer(id);
+    assert(layer != nullptr && layer->isText());
+
+    int hitX = -1;
+    int hitY = -1;
+    for (std::uint32_t y = 0; y < layer->height() && hitY < 0; ++y) {
+        for (std::uint32_t x = 0; x < layer->width(); ++x) {
+            if (layer->buffer().getPixel(x, y).a > 0) {
+                hitX = static_cast<int>(x);
+                hitY = static_cast<int>(y);
+                break;
+            }
+        }
+    }
+    assert(hitX >= 0 && hitY >= 0);
+    assert(
+        controller.textLayerAt(
+            static_cast<double>(hitX) + 5.5,
+            static_cast<double>(hitY) + 5.5
+        ) == id
+    );
+    assert(controller.textLayerAt(1000.0, 1000.0) == Layer::invalidId);
+}
+
+void testTypographyPanelEditingSession() {
+    TypographyPanel panel;
+    TextLayerData data;
+    data.text = "Hi";
+    panel.setTextData(&data);
+
+    auto* content =
+        panel.findChild<QPlainTextEdit*>(QStringLiteral("textContentEdit"));
+    assert(content != nullptr);
+    assert(content->toPlainText() == QStringLiteral("Hi"));
+
+    // Reloading an identical payload must not reset the caret mid-edit.
+    content->setPlainText(QStringLiteral("Hi there"));
+    content->moveCursor(QTextCursor::End);
+    const int caret = content->textCursor().position();
+    TextLayerData same;
+    same.text = "Hi there";
+    panel.setTextData(&same);
+    assert(content->textCursor().position() == caret);
+
+    // Escape asks the owner to cancel the in-progress edit.
+    bool cancelled = false;
+    QObject::connect(
+        &panel,
+        &TypographyPanel::editingCancelled,
+        [&] { cancelled = true; }
+    );
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(content, &escape);
+    assert(cancelled);
+
+    // focusEditor targets the real input widget, not the panel container.
+    panel.show();
+    QApplication::processEvents();
+    panel.focusEditor(true);
+    QApplication::processEvents();
+    assert(panel.focusWidget() == content);
+    assert(content->textCursor().hasSelection());
+    panel.hide();
+}
+
+void testMainWindowTextEditingGroupsUndo() {
+    MainWindow window;
+    window.show();
+    QApplication::processEvents();
+    auto* canvas = window.findChild<CanvasView*>(QStringLiteral("canvasView"));
+    auto* textAction =
+        window.findChild<QAction*>(QStringLiteral("actionToolText"));
+    auto* brushAction =
+        window.findChild<QAction*>(QStringLiteral("actionToolBrush"));
+    auto* content =
+        window.findChild<QPlainTextEdit*>(QStringLiteral("textContentEdit"));
+    assert(canvas != nullptr && textAction != nullptr &&
+           brushAction != nullptr && content != nullptr);
+
+    textAction->trigger();
+    QCoreApplication::processEvents();
+
+    AppController& controller = window.controller();
+    assert(QMetaObject::invokeMethod(
+        canvas, "textPlacementRequested", Qt::DirectConnection,
+        Q_ARG(QPointF, QPointF(10.0, 10.0))));
+    QCoreApplication::processEvents();
+
+    const LayerId id = controller.selectedLayerId();
+    assert(controller.isEditingText());
+    assert(controller.textEditLayerId() == id);
+    assert(content->hasFocus());
+
+    // Global single-key tool shortcuts must not fire while the text editor owns
+    // keyboard focus, or typing "b" would silently switch to the brush.
+    {
+        QKeyEvent toolKey(QEvent::KeyPress, Qt::Key_B, Qt::NoModifier, "b");
+        QApplication::sendEvent(&window, &toolKey);
+        QApplication::processEvents();
+        assert(canvas->activeTool() == CanvasView::Tool::Text);
+        assert(textAction->isChecked());
+    }
+
+    // Simulate typing, one textChanged per character.
+    content->setPlainText(QStringLiteral("A"));
+    QCoreApplication::processEvents();
+    content->setPlainText(QStringLiteral("AB"));
+    QCoreApplication::processEvents();
+    content->setPlainText(QStringLiteral("ABC"));
+    QCoreApplication::processEvents();
+    assert(controller.textData(id)->text == "ABC");
+
+    // Switching tools commits the run as exactly one undoable change.
+    brushAction->trigger();
+    QCoreApplication::processEvents();
+    assert(!controller.isEditingText());
+    assert(controller.textData(id)->text == "ABC");
+
+    assert(controller.undo());
+    assert(controller.textData(id) != nullptr);
+    assert(controller.textData(id)->text == "Text");
+}
+
 void testShapeRendererProducesPixels() {
     ShapeLayerData shape;
     shape.type = ShapeType::Rectangle;
@@ -1493,6 +1727,11 @@ int main(int argc, char* argv[]) {
     testTextRendererHorizontalPosition();
     testControllerTextIntegration();
     testMainWindowTextTool();
+    testControllerBrushRegionSignal();
+    testControllerTextEditSession();
+    testTextLayerHitTest();
+    testTypographyPanelEditingSession();
+    testMainWindowTextEditingGroupsUndo();
     testShapeRendererProducesPixels();
     testControllerShapeIntegration();
     testMainWindowShapeTool();

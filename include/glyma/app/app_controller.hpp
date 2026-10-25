@@ -35,6 +35,14 @@ public:
     [[nodiscard]] const core::Document& document() const noexcept;
     [[nodiscard]] core::Document& document() noexcept;
     [[nodiscard]] core::ImageBuffer render() const;
+    // Render a sub-rectangle of the composited canvas (clipped to bounds). Used
+    // by the canvas to repaint only the region touched by an incremental edit.
+    [[nodiscard]] core::ImageBuffer renderRegion(
+        int x,
+        int y,
+        int width,
+        int height
+    ) const;
     [[nodiscard]] core::LayerId selectedLayerId() const noexcept;
     [[nodiscard]] const QString& filePath() const noexcept;
 
@@ -158,6 +166,25 @@ public:
     [[nodiscard]] const core::TextLayerData* textData(core::LayerId id) const
         noexcept;
 
+    // Text editing session. While a session is open, updateTextData() applies
+    // content/typography changes live for preview but records nothing in
+    // history, so a whole typing run (or a burst of typography tweaks) collapses
+    // into one undoable change on commitTextEdit(). cancelTextEdit() restores
+    // the exact payload captured at beginTextEdit(). Starting a new session (or
+    // committing/cancelling) closes any previous one.
+    bool beginTextEdit(core::LayerId id);
+    bool updateTextData(core::LayerId id, const core::TextLayerData& data);
+    bool commitTextEdit();
+    void cancelTextEdit();
+    [[nodiscard]] bool isEditingText() const noexcept;
+    [[nodiscard]] core::LayerId textEditLayerId() const noexcept;
+    // Hit test the topmost text layer whose rendered cache is opaque at the
+    // document position. Returns Layer::invalidId when nothing is hit.
+    [[nodiscard]] core::LayerId textLayerAt(
+        double documentX,
+        double documentY
+    ) const noexcept;
+
     // Vector shape layer API. Adding, editing, and rasterizing each record
     // exactly one undoable command. Vector layer buffers hold a regenerable
     // render cache that is refreshed automatically after every document change.
@@ -181,6 +208,10 @@ public:
 
 signals:
     void documentChanged();
+    // Emitted for incremental edits (brush strokes) so the canvas can repaint
+    // only the touched region instead of recompositing the whole document. The
+    // rectangle is in document pixel coordinates, already clipped to bounds.
+    void documentRegionChanged(int x, int y, int width, int height);
     void layersChanged();
     void selectionChanged(quint64 layerId);
     void pixelSelectionChanged();
@@ -200,6 +231,9 @@ private:
     void refreshTextCaches();
     void refreshShapeCaches();
     void refreshModifiedState();
+    void emitBrushRegion();
+    // Close any open text-editing session before a history-mutating operation.
+    void commitPendingTextEdit();
     bool commitTransform(core::CommandPtr command);
     void discardAdjustment();
     [[nodiscard]] std::string nextLayerName() const;
@@ -221,6 +255,9 @@ private:
     core::LayerId adjustmentLayerId_{core::Layer::invalidId};
     core::AdjustmentSettings adjustmentSettings_;
     bool adjusting_{false};
+    std::optional<core::TextLayerData> textEditOriginal_;
+    core::LayerId textEditLayerId_{core::Layer::invalidId};
+    bool editingText_{false};
     core::LayerId selectedLayerId_{core::Layer::invalidId};
     QString filePath_;
     std::uint64_t savedRevision_{0};

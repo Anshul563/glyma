@@ -39,6 +39,8 @@ struct TextStyle {
     TextVerticalAlign verticalAlign{TextVerticalAlign::Top};
     // When true, the text wraps to the box width at word boundaries.
     bool wordWrap{false};
+
+    [[nodiscard]] bool operator==(const TextStyle&) const = default;
 };
 
 // The editable payload of a text layer. The layer's X/Y offset positions the
@@ -63,6 +65,8 @@ struct TextLayerData {
     // Throws std::invalid_argument when the payload cannot be rendered.
     void validate() const;
     [[nodiscard]] bool isValid() const noexcept;
+
+    [[nodiscard]] bool operator==(const TextLayerData&) const = default;
 };
 
 // True when the style values are within the supported ranges.

@@ -10,8 +10,8 @@
 #include "glyma/core/selection.hpp"
 #include "glyma/core/shape_layer.hpp"
 
-class QGraphicsPixmapItem;
 class QImage;
+class QRect;
 class QGraphicsScene;
 class QKeyEvent;
 class QMouseEvent;
@@ -21,6 +21,7 @@ class QWheelEvent;
 
 namespace glyma::app {
 
+class CanvasImageItem;
 class CheckerboardItem;
 class CropItem;
 class SelectionItem;
@@ -60,6 +61,10 @@ public:
     explicit CanvasView(QWidget* parent = nullptr);
 
     void setImage(const QImage& image);
+    // Repaint only `region` (document pixel coordinates) of the displayed
+    // snapshot with `subImage` (same size as the region). Used for incremental
+    // edits so the whole canvas is not re-rendered or re-uploaded per event.
+    void patchImage(const QRect& region, const QImage& subImage);
     [[nodiscard]] QSize imageSize() const noexcept;
 
     [[nodiscard]] double zoom() const noexcept;
@@ -104,6 +109,9 @@ public:
     [[nodiscard]] bool hasCrop() const noexcept;
 
 signals:
+    // Emitted after the active tool actually changes. Owners use it to close
+    // tool-scoped editing sessions (for example a pending text edit).
+    void toolChanged();
     void strokeStarted(const QPointF& documentPosition);
     void strokeMoved(const QPointF& documentPosition);
     void strokeEnded();
@@ -167,7 +175,7 @@ private:
 
     QGraphicsScene* scene_{nullptr};
     CheckerboardItem* checkerboard_{nullptr};
-    QGraphicsPixmapItem* pixmapItem_{nullptr};
+    CanvasImageItem* pixmapItem_{nullptr};
     SelectionItem* selectionItem_{nullptr};
     CropItem* cropItem_{nullptr};
     ShapePreviewItem* shapePreviewItem_{nullptr};

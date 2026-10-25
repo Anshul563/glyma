@@ -169,4 +169,83 @@ void Compositor::composite(
     }
 }
 
+void Compositor::compositeRegion(
+    const LayerStack& stack,
+    ImageBuffer& destination,
+    std::int32_t originX,
+    std::int32_t originY
+) {
+    if (stack.empty()) {
+        return;
+    }
+
+    const std::int32_t regionWidth =
+        static_cast<std::int32_t>(destination.width());
+    const std::int32_t regionHeight =
+        static_cast<std::int32_t>(destination.height());
+
+    for (const auto& layer : stack.layers()) {
+        if (!layer.visible()) {
+            continue;
+        }
+
+        const float layerOpacity = layer.opacity();
+        if (layerOpacity <= 0.0F || layerOpacity > 1.0F ||
+            !std::isfinite(layerOpacity)) {
+            continue;
+        }
+
+        const std::int32_t offsetX = layer.x();
+        const std::int32_t offsetY = layer.y();
+        const std::int32_t layerWidth =
+            static_cast<std::int32_t>(layer.width());
+        const std::int32_t layerHeight =
+            static_cast<std::int32_t>(layer.height());
+
+        // Destination pixel (dx, dy) maps to canvas (originX + dx, originY + dy)
+        // and to layer source (originX + dx - offsetX, ...). Clip that mapping
+        // to both the window and the layer bounds.
+        const std::int32_t clipStartX = std::max(0, offsetX - originX);
+        const std::int32_t clipStartY = std::max(0, offsetY - originY);
+        const std::int32_t clipEndX = std::min(
+            regionWidth, offsetX + layerWidth - originX
+        );
+        const std::int32_t clipEndY = std::min(
+            regionHeight, offsetY + layerHeight - originY
+        );
+
+        if (clipStartX >= clipEndX || clipStartY >= clipEndY) {
+            continue;
+        }
+
+        const auto& sourceBuffer = layer.buffer();
+        const float opacity = layerOpacity;
+
+        for (std::int32_t y = clipStartY; y < clipEndY; ++y) {
+            for (std::int32_t x = clipStartX; x < clipEndX; ++x) {
+                const std::int32_t srcX = originX + x - offsetX;
+                const std::int32_t srcY = originY + y - offsetY;
+                if (srcX < 0 || srcY < 0) {
+                    continue;
+                }
+
+                const Pixel sourcePixel = sourceBuffer.getPixel(
+                    static_cast<std::uint32_t>(srcX),
+                    static_cast<std::uint32_t>(srcY)
+                );
+                const Pixel destinationPixel = destination.getPixel(
+                    static_cast<std::uint32_t>(x),
+                    static_cast<std::uint32_t>(y)
+                );
+
+                destination.setPixel(
+                    static_cast<std::uint32_t>(x),
+                    static_cast<std::uint32_t>(y),
+                    sourceOver(sourcePixel, destinationPixel, opacity)
+                );
+            }
+        }
+    }
+}
+
 } // namespace glyma::core

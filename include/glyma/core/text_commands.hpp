@@ -36,6 +36,10 @@ private:
 class SetTextDataCommand : public Command {
 public:
     SetTextDataCommand(LayerId id, TextLayerData next);
+    // Pre-captured form: the caller already knows the previous payload (for
+    // example a text-editing session that applied live previews), so execute()
+    // must not recapture it. Used with CommandHistory::pushExecuted().
+    SetTextDataCommand(LayerId id, TextLayerData previous, TextLayerData next);
 
     [[nodiscard]] std::string name() const override;
     bool execute(Document& document) override;

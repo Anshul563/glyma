@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QColor>
+#include <QHash>
+#include <QKeySequence>
 #include <QMainWindow>
 
 #include "glyma/app/app_controller.hpp"
@@ -30,6 +32,7 @@ class MainWindow : public QMainWindow {
 
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
     [[nodiscard]] AppController& controller() noexcept;
 
@@ -50,7 +53,9 @@ private:
     void connectSignals();
     void applyStyle();
     void updateToolOptions();
+    void setToolShortcutsSuppressed(bool suppressed);
     void refreshCanvas();
+    void refreshCanvasRegion(int x, int y, int width, int height);
     void refreshLayers();
     void refreshTypography();
     void refreshShape();
@@ -168,6 +173,10 @@ private:
     QSpinBox* fillToleranceSpin_{nullptr};
     QSpinBox* fillOpacitySpin_{nullptr};
     QColor brushColor_{0, 0, 0, 255};
+
+    // Tool shortcuts saved while the text editor owns focus, so single-key
+    // shortcuts (B, E, R, T, U, C) do not fire mid-typing.
+    QHash<QAction*, QKeySequence> suppressedShortcuts_;
 };
 
 } // namespace glyma::app

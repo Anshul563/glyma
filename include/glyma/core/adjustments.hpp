@@ -60,6 +60,7 @@ struct AdjustmentSettings {
     // True when no field differs from its default (identity operation).
     [[nodiscard]] bool isDefault() const noexcept;
     [[nodiscard]] bool isValid() const noexcept;
+    [[nodiscard]] bool operator==(const AdjustmentSettings&) const = default;
     // Throws std::invalid_argument when a parameter is out of range or not
     // finite.
     void validate() const;

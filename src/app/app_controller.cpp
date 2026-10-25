@@ -45,6 +45,23 @@ core::ImageBuffer AppController::render() const {
     return document_->render();
 }
 
+core::ImageBuffer AppController::renderRegion(
+    int x,
+    int y,
+    int width,
+    int height
+) const {
+    if (width <= 0 || height <= 0) {
+        return core::ImageBuffer(1, 1);
+    }
+    return document_->renderRegion(
+        static_cast<std::int32_t>(x),
+        static_cast<std::int32_t>(y),
+        static_cast<std::uint32_t>(width),
+        static_cast<std::uint32_t>(height)
+    );
+}
+
 core::LayerId AppController::selectedLayerId() const noexcept {
     return selectedLayerId_;
 }
@@ -62,7 +79,19 @@ bool AppController::canRedo() const noexcept {
 }
 
 bool AppController::isModified() const noexcept {
-    return unsavedContent_ || history_.currentRevision() != savedRevision_;
+    if (unsavedContent_ || history_.currentRevision() != savedRevision_) {
+        return true;
+    }
+    // Live text edits are applied to the layer before they are recorded in
+    // history, so surface them here to keep the modified marker honest.
+    if (editingText_ && textEditOriginal_.has_value()) {
+        const core::Layer* layer = document_->findLayer(textEditLayerId_);
+        if (layer != nullptr && layer->isText() &&
+            layer->text() != *textEditOriginal_) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const core::BrushSettings& AppController::brushSettings() const noexcept {
@@ -115,7 +144,7 @@ bool AppController::beginBrushStroke(double documentX, double documentY) {
         );
         brushStroke_ = std::move(stroke);
         if (changed) {
-            emit documentChanged();
+            emitBrushRegion();
         }
         return true;
     } catch (const std::exception&) {
@@ -133,9 +162,43 @@ bool AppController::updateBrushStroke(double documentX, double documentY) {
         documentY - strokeOffsetY_
     );
     if (changed) {
-        emit documentChanged();
+        emitBrushRegion();
     }
     return changed;
+}
+
+void AppController::emitBrushRegion() {
+    if (!brushStroke_) {
+        return;
+    }
+    const core::PixelRegion region = brushStroke_->lastDirtyRegion();
+    if (region.isEmpty()) {
+        return;
+    }
+
+    const auto width = static_cast<long long>(document_->width());
+    const auto height = static_cast<long long>(document_->height());
+    const long long left = static_cast<long long>(region.x) +
+                           static_cast<long long>(std::llround(strokeOffsetX_));
+    const long long top = static_cast<long long>(region.y) +
+                          static_cast<long long>(std::llround(strokeOffsetY_));
+    const long long right = left + static_cast<long long>(region.width);
+    const long long bottom = top + static_cast<long long>(region.height);
+
+    const long long clipLeft = std::max(0LL, left);
+    const long long clipTop = std::max(0LL, top);
+    const long long clipRight = std::min(width, right);
+    const long long clipBottom = std::min(height, bottom);
+    if (clipLeft >= clipRight || clipTop >= clipBottom) {
+        return;
+    }
+
+    emit documentRegionChanged(
+        static_cast<int>(clipLeft),
+        static_cast<int>(clipTop),
+        static_cast<int>(clipRight - clipLeft),
+        static_cast<int>(clipBottom - clipTop)
+    );
 }
 
 bool AppController::endBrushStroke() {
@@ -382,6 +445,12 @@ bool AppController::updateAdjustment(const core::AdjustmentSettings& settings) {
         return false;
     }
 
+    // Stale/duplicate previews are dropped: if the requested settings match the
+    // ones already applied there is nothing to recompute.
+    if (settings == adjustmentSettings_) {
+        return true;
+    }
+
     const core::SelectionMask mask{
         &document_->selection(),
         static_cast<double>(layer->x()),
@@ -471,6 +540,11 @@ void AppController::installDocument(
     }
     cancelSelection();
     discardAdjustment();
+    // The document is being replaced; drop any open text session without
+    // touching the (soon to be cleared) history.
+    textEditOriginal_.reset();
+    textEditLayerId_ = core::Layer::invalidId;
+    editingText_ = false;
     document_ = std::move(document);
     filePath_ = path;
     history_.clear();
@@ -686,6 +760,7 @@ bool AppController::undo() {
     }
     cancelSelection();
     cancelAdjustment();
+    commitPendingTextEdit();
     if (!history_.undo(*document_)) {
         return false;
     }
@@ -700,6 +775,7 @@ bool AppController::redo() {
     }
     cancelSelection();
     cancelAdjustment();
+    commitPendingTextEdit();
     if (!history_.redo(*document_)) {
         return false;
     }
@@ -888,6 +964,7 @@ void AppController::selectLayer(core::LayerId id) {
         (void)endBrushStroke();
     }
     cancelSelection();
+    commitPendingTextEdit();
     selectedLayerId_ = id;
     emit selectionChanged(static_cast<quint64>(selectedLayerId_));
 }
@@ -920,6 +997,7 @@ bool AppController::addTextLayer(
         (void)endBrushStroke();
     }
     cancelSelection();
+    commitPendingTextEdit();
     auto command = std::make_unique<core::AddTextLayerCommand>(
         nextLayerName(), data, x, y
     );
@@ -959,6 +1037,13 @@ bool AppController::rasterizeTextLayer(core::LayerId id) {
     if (brushStroke_) {
         (void)endBrushStroke();
     }
+    if (editingText_ && textEditLayerId_ == id) {
+        (void)commitTextEdit();
+        layer = document_->findLayer(id);
+        if (layer == nullptr || !layer->isText()) {
+            return false;
+        }
+    }
     auto command = std::make_unique<core::RasterizeTextLayerCommand>(id);
     if (!history_.execute(std::move(command), *document_)) {
         return false;
@@ -973,6 +1058,154 @@ const core::TextLayerData* AppController::textData(core::LayerId id) const noexc
         return nullptr;
     }
     return &layer->text();
+}
+
+bool AppController::isEditingText() const noexcept {
+    return editingText_;
+}
+
+core::LayerId AppController::textEditLayerId() const noexcept {
+    return textEditLayerId_;
+}
+
+bool AppController::beginTextEdit(core::LayerId id) {
+    if (editingText_ && textEditLayerId_ == id) {
+        return true;
+    }
+    if (editingText_) {
+        commitPendingTextEdit();
+    }
+
+    core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isText()) {
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+
+    textEditOriginal_ = layer->text();
+    textEditLayerId_ = id;
+    editingText_ = true;
+    return true;
+}
+
+bool AppController::updateTextData(
+    core::LayerId id,
+    const core::TextLayerData& data
+) {
+    if (!data.isValid()) {
+        emit errorOccurred(tr("Text properties are outside the supported range."));
+        return false;
+    }
+    core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isText()) {
+        return false;
+    }
+    if (!editingText_ || textEditLayerId_ != id) {
+        // No session for this layer: fall back to a single undoable change.
+        return setTextData(id, data);
+    }
+
+    try {
+        layer->setTextData(data);
+    } catch (const std::exception&) {
+        return false;
+    }
+    // Live preview only: refresh render caches and the canvas, but do not touch
+    // history or emit layersChanged (which would clobber the editor widget).
+    refreshTextCaches();
+    refreshShapeCaches();
+    emit documentChanged();
+    refreshModifiedState();
+    return true;
+}
+
+bool AppController::commitTextEdit() {
+    if (!editingText_) {
+        return false;
+    }
+
+    const core::LayerId id = textEditLayerId_;
+    core::Layer* layer = document_->findLayer(id);
+    const bool unchanged =
+        !textEditOriginal_.has_value() || layer == nullptr ||
+        !layer->isText() || layer->text() == *textEditOriginal_;
+
+    if (unchanged) {
+        textEditOriginal_.reset();
+        textEditLayerId_ = core::Layer::invalidId;
+        editingText_ = false;
+        return false;
+    }
+
+    auto command = std::make_unique<core::SetTextDataCommand>(
+        id, *textEditOriginal_, layer->text()
+    );
+    textEditOriginal_.reset();
+    textEditLayerId_ = core::Layer::invalidId;
+    editingText_ = false;
+
+    // The preview has already been applied to the layer, so record it as
+    // executed rather than applying it twice.
+    if (!history_.pushExecuted(std::move(command))) {
+        emitDocumentState(false);
+        return false;
+    }
+    emitDocumentState(false);
+    return true;
+}
+
+void AppController::cancelTextEdit() {
+    if (!editingText_) {
+        return;
+    }
+    core::Layer* layer = document_->findLayer(textEditLayerId_);
+    const bool restored =
+        layer != nullptr && layer->isText() && textEditOriginal_.has_value();
+    if (restored) {
+        try {
+            layer->setTextData(*textEditOriginal_);
+        } catch (const std::exception&) {
+            // Leave the layer untouched on failure; the session is still closed.
+        }
+    }
+    textEditOriginal_.reset();
+    textEditLayerId_ = core::Layer::invalidId;
+    editingText_ = false;
+    emitDocumentState(true);
+}
+
+void AppController::commitPendingTextEdit() {
+    if (editingText_) {
+        (void)commitTextEdit();
+    }
+}
+
+core::LayerId AppController::textLayerAt(
+    double documentX,
+    double documentY
+) const noexcept {
+    const auto& layers = document_->layerStack().layers();
+    for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
+        if (!it->isText() || !it->visible()) {
+            continue;
+        }
+        const double localX = documentX - static_cast<double>(it->x());
+        const double localY = documentY - static_cast<double>(it->y());
+        if (localX < 0.0 || localY < 0.0) {
+            continue;
+        }
+        const auto pixelX = static_cast<std::uint32_t>(localX);
+        const auto pixelY = static_cast<std::uint32_t>(localY);
+        if (pixelX >= it->width() || pixelY >= it->height()) {
+            continue;
+        }
+        if (it->buffer().getPixel(pixelX, pixelY).a > 0) {
+            return it->id();
+        }
+    }
+    return core::Layer::invalidId;
 }
 
 bool AppController::addShapeLayer(const core::ShapeLayerData& data) {

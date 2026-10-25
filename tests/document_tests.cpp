@@ -216,6 +216,48 @@ int main() {
         assert(doc.removeLayer(id) == false);
     }
 
+    // Region rendering matches the full render over the same rectangle
+    {
+        Document doc("Doc", 6, 5);
+        doc.setSolidBackground(Pixel(10, 20, 30, 255));
+        auto top = doc.addCanvasLayer("Top");
+        auto& topBuffer = doc.findLayer(top)->buffer();
+        for (std::uint32_t y = 0; y < topBuffer.height(); ++y) {
+            for (std::uint32_t x = 0; x < topBuffer.width(); ++x) {
+                topBuffer.setPixel(
+                    x,
+                    y,
+                    Pixel{
+                        static_cast<std::uint8_t>(x * 20),
+                        static_cast<std::uint8_t>(y * 30),
+                        200,
+                        static_cast<std::uint8_t>(100 + x * 10)
+                    }
+                );
+            }
+        }
+        doc.findLayer(top)->setPosition(-1, -1);
+
+        const ImageBuffer full = doc.render();
+        const ImageBuffer region = doc.renderRegion(1, 1, 3, 2);
+        assert(region.width() == 3);
+        assert(region.height() == 2);
+        for (std::uint32_t y = 0; y < region.height(); ++y) {
+            for (std::uint32_t x = 0; x < region.width(); ++x) {
+                assert(region.getPixel(x, y) == full.getPixel(1 + x, 1 + y));
+            }
+        }
+
+        // Rectangles are clipped to the canvas bounds.
+        const ImageBuffer clipped = doc.renderRegion(4, 3, 10, 10);
+        assert(clipped.width() == 2);
+        assert(clipped.height() == 2);
+
+        // Empty / fully out-of-bounds rectangles yield a 1x1 buffer.
+        const ImageBuffer empty = doc.renderRegion(50, 50, 4, 4);
+        assert(empty.width() == 1 && empty.height() == 1);
+    }
+
     std::cout << "All Glyma document tests passed!\n";
     return 0;
 }

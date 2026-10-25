@@ -12,6 +12,20 @@
 
 namespace glyma::core {
 
+// Axis-aligned rectangle in integer pixel coordinates, used to describe the
+// region of a layer (or canvas) touched by an edit so callers can repaint only
+// what changed instead of recompositing the whole document.
+struct PixelRegion {
+    std::uint32_t x{0};
+    std::uint32_t y{0};
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+
+    [[nodiscard]] bool isEmpty() const noexcept {
+        return width == 0 || height == 0;
+    }
+};
+
 // Reversible sparse pixel edit produced by BrushStroke::finish(). Redo sets
 // every changed pixel to the exact value the stroke produced; undo restores
 // the values captured before the stroke started.
@@ -80,6 +94,11 @@ public:
     [[nodiscard]] std::size_t changeCount() const noexcept;
     [[nodiscard]] const BrushSettings& settings() const noexcept;
 
+    // Bounds (in layer-buffer pixel coordinates) of the pixels touched by the
+    // most recent start()/lineTo() call. Empty when that call changed nothing.
+    // Callers use this to repaint only the affected region.
+    [[nodiscard]] PixelRegion lastDirtyRegion() const noexcept;
+
 private:
     struct PendingChange {
         std::size_t index{0};
@@ -96,6 +115,9 @@ private:
     ) const noexcept;
     bool stamp(double x, double y);
 
+    void resetDirty() noexcept;
+    void expandDirty(long long pixelX, long long pixelY) noexcept;
+
     ImageBuffer* buffer_{nullptr};
     LayerId layerId_{Layer::invalidId};
     BrushSettings settings_;
@@ -106,6 +128,13 @@ private:
     double lastY_{0.0};
     std::vector<PendingChange> changes_;
     std::unordered_map<std::size_t, std::size_t> changePositions_;
+
+    // Dirty bounds for the current call, in layer-buffer pixel coordinates.
+    bool dirtyValid_{false};
+    long long dirtyMinX_{0};
+    long long dirtyMinY_{0};
+    long long dirtyMaxX_{0};
+    long long dirtyMaxY_{0};
 };
 
 } // namespace glyma::core

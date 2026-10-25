@@ -83,6 +83,17 @@ public:
     // Source layers are not mutated.
     [[nodiscard]] ImageBuffer render() const;
 
+    // Render only the canvas sub-rectangle [x, x+width) x [y, y+height) into a
+    // buffer of that size. The rectangle is clipped to the canvas; an empty or
+    // fully out-of-bounds rectangle yields a 1x1 transparent buffer. Used to
+    // repaint dirty regions without recompositing the whole document.
+    [[nodiscard]] ImageBuffer renderRegion(
+        std::int32_t x,
+        std::int32_t y,
+        std::uint32_t width,
+        std::uint32_t height
+    ) const;
+
     [[nodiscard]] static Id generateId() noexcept;
 
 private:

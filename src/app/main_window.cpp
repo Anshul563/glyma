@@ -31,11 +31,13 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
+#include <QRect>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSize>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QWidgetAction>
@@ -99,6 +101,15 @@ MainWindow::MainWindow(QWidget* parent)
     refreshStatus();
     updateActions();
     updateTitle();
+}
+
+MainWindow::~MainWindow() {
+    // Child widgets outlive this object's members, so stop the typography panel
+    // from signalling back (which would touch already-destroyed members) while
+    // Qt tears the widget tree down.
+    if (typographyPanel_ != nullptr) {
+        disconnect(typographyPanel_, nullptr, this, nullptr);
+    }
 }
 
 AppController& MainWindow::controller() noexcept {
@@ -1000,6 +1011,19 @@ void MainWindow::connectSignals() {
         controller_.bucketFill(position.x(), position.y());
     });
     connect(canvas_, &CanvasView::textPlacementRequested, this, [this](const QPointF& position) {
+        // Clicking on an existing text layer re-opens it for editing instead of
+        // stacking a new layer on top of it.
+        const core::LayerId hit = controller_.textLayerAt(position.x(), position.y());
+        if (hit != core::Layer::invalidId) {
+            controller_.selectLayer(hit);
+            controller_.beginTextEdit(hit);
+            refreshTypography();
+            if (typographyPanel_ != nullptr) {
+                typographyPanel_->focusEditor(true);
+            }
+            return;
+        }
+
         core::TextLayerData data;
         data.text = tr("Text").toStdString();
         if (controller_.addTextLayer(
@@ -1007,9 +1031,17 @@ void MainWindow::connectSignals() {
                 static_cast<std::int32_t>(std::lround(position.x())),
                 static_cast<std::int32_t>(std::lround(position.y()))
             )) {
+            controller_.beginTextEdit(controller_.selectedLayerId());
             refreshTypography();
-            typographyPanel_->setFocus(Qt::OtherFocusReason);
+            if (typographyPanel_ != nullptr) {
+                // Focus the real input widget and pre-select the placeholder so
+                // the user can type immediately.
+                typographyPanel_->focusEditor(true);
+            }
         }
+    });
+    connect(canvas_, &CanvasView::toolChanged, this, [this] {
+        controller_.commitTextEdit();
     });
     connect(canvas_, &CanvasView::shapeCreationRequested, this, [this](const core::ShapeLayerData& shape) {
         if (controller_.addShapeLayer(shape)) {
@@ -1033,6 +1065,14 @@ void MainWindow::connectSignals() {
         refreshStatus();
         updateTitle();
     });
+    connect(
+        &controller_,
+        &AppController::documentRegionChanged,
+        this,
+        [this](int x, int y, int width, int height) {
+            refreshCanvasRegion(x, y, width, height);
+        }
+    );
     connect(&controller_, &AppController::pixelSelectionChanged, this, [this] {
         canvas_->setSelection(controller_.selection());
     });
@@ -1120,8 +1160,27 @@ void MainWindow::connectSignals() {
         &TypographyPanel::textEdited,
         this,
         [this](const core::TextLayerData& data) {
-            controller_.setTextData(controller_.selectedLayerId(), data);
+            const core::LayerId id = controller_.selectedLayerId();
+            // Open a session lazily so any edit (typing or typography) is
+            // grouped into a single undoable change, then apply it live.
+            if (!controller_.isEditingText() ||
+                controller_.textEditLayerId() != id) {
+                if (!controller_.beginTextEdit(id)) {
+                    controller_.setTextData(id, data);
+                    return;
+                }
+            }
+            controller_.updateTextData(id, data);
         }
+    );
+    connect(typographyPanel_, &TypographyPanel::editingCancelled, this, [this] {
+        controller_.cancelTextEdit();
+    });
+    connect(
+        typographyPanel_,
+        &TypographyPanel::editorFocusChanged,
+        this,
+        [this](bool focused) { setToolShortcutsSuppressed(focused); }
     );
     connect(typographyPanel_, &TypographyPanel::rasterizeRequested, this, [this] {
         controller_.rasterizeTextLayer(controller_.selectedLayerId());
@@ -1339,6 +1398,39 @@ void MainWindow::refreshCanvas() {
     canvas_->setImage(toQImage(controller_.render()));
 }
 
+void MainWindow::setToolShortcutsSuppressed(bool suppressed) {
+    if (toolGroup_ == nullptr) {
+        return;
+    }
+    if (suppressed) {
+        if (!suppressedShortcuts_.isEmpty()) {
+            return;
+        }
+        for (QAction* action : toolGroup_->actions()) {
+            if (!action->shortcut().isEmpty()) {
+                suppressedShortcuts_.insert(action, action->shortcut());
+                action->setShortcut(QKeySequence());
+            }
+        }
+    } else {
+        for (auto it = suppressedShortcuts_.begin();
+             it != suppressedShortcuts_.end();
+             ++it) {
+            it.key()->setShortcut(it.value());
+        }
+        suppressedShortcuts_.clear();
+    }
+}
+
+void MainWindow::refreshCanvasRegion(int x, int y, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    const core::ImageBuffer region =
+        controller_.renderRegion(x, y, width, height);
+    canvas_->patchImage(QRect(x, y, width, height), toQImage(region));
+}
+
 void MainWindow::refreshLayers() {
     layerDock_->refresh(
         controller_.document().layerStack(),
@@ -1486,6 +1578,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 bool MainWindow::prepareForDestructiveAction() {
+    // Fold any in-progress text edit into history so it is detected as a
+    // modification and saved by the prompts below.
+    controller_.commitTextEdit();
     return confirmUnsavedChanges(
         controller_.isModified(),
         [this] { return promptUnsavedChanges(); },
@@ -1727,17 +1822,43 @@ void MainWindow::onAdjustments() {
 
     AdjustmentDialog dialog(this);
     dialog.setSettings(controller_.adjustmentSettings());
+
+    // Coalesce rapid slider events: a fast drag emits a valueChanged per pixel,
+    // and each preview is a full-image recompute plus recomposite. A zero-delay
+    // single-shot timer collapses a burst into one update using only the latest
+    // settings, so the UI stays responsive and no stale preview is applied.
+    QTimer previewTimer;
+    previewTimer.setSingleShot(true);
+    previewTimer.setInterval(0);
+    core::AdjustmentSettings pending = controller_.adjustmentSettings();
+    bool hasPending = false;
+    connect(&previewTimer, &QTimer::timeout, this, [this, &pending, &hasPending] {
+        if (!hasPending) {
+            return;
+        }
+        hasPending = false;
+        controller_.updateAdjustment(pending);
+    });
     connect(
         &dialog,
         &AdjustmentDialog::settingsChanged,
         this,
-        [this](const core::AdjustmentSettings& settings) {
-            controller_.updateAdjustment(settings);
+        [&pending, &hasPending, &previewTimer](
+            const core::AdjustmentSettings& settings
+        ) {
+            pending = settings;
+            hasPending = true;
+            previewTimer.start();
         }
     );
 
     const int result = dialog.exec();
+    previewTimer.stop();
     if (result == QDialog::Accepted) {
+        if (hasPending) {
+            controller_.updateAdjustment(pending);
+            hasPending = false;
+        }
         if (controller_.applyAdjustment()) {
             statusBar()->showMessage(tr("Applied adjustments."), 3000);
         } else {

@@ -171,6 +171,38 @@ ImageBuffer Document::render() const {
     return canvas;
 }
 
+ImageBuffer Document::renderRegion(
+    std::int32_t x,
+    std::int32_t y,
+    std::uint32_t width,
+    std::uint32_t height
+) const {
+    const std::int32_t startX = std::max(x, std::int32_t{0});
+    const std::int32_t startY = std::max(y, std::int32_t{0});
+    const std::int32_t endX = std::min(
+        x + static_cast<std::int32_t>(width),
+        static_cast<std::int32_t>(width_)
+    );
+    const std::int32_t endY = std::min(
+        y + static_cast<std::int32_t>(height),
+        static_cast<std::int32_t>(height_)
+    );
+
+    if (startX >= endX || startY >= endY) {
+        ImageBuffer empty(1, 1);
+        empty.clear(Pixel{0, 0, 0, 0});
+        return empty;
+    }
+
+    ImageBuffer region(
+        static_cast<std::uint32_t>(endX - startX),
+        static_cast<std::uint32_t>(endY - startY)
+    );
+    region.clear(transparentBackground_ ? Pixel{0, 0, 0, 0} : backgroundColor_);
+    Compositor::compositeRegion(layerStack_, region, startX, startY);
+    return region;
+}
+
 Document::Id Document::generateId() noexcept {
     return g_nextDocumentId.fetch_add(1, std::memory_order_relaxed);
 }

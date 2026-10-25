@@ -26,6 +26,19 @@ public:
         const LayerStack& stack,
         ImageBuffer& destination
     );
+
+    // Render a sub-rectangle of the canvas into destination. `originX`/`originY`
+    // are the canvas coordinates of destination pixel (0, 0); destination is
+    // therefore a window onto the full canvas. Layers are still composited
+    // bottom-to-top with their own offsets and opacity, and are clipped to the
+    // window. This lets callers repaint a dirty region without recompositing
+    // the whole document.
+    static void compositeRegion(
+        const LayerStack& stack,
+        ImageBuffer& destination,
+        std::int32_t originX,
+        std::int32_t originY
+    );
 };
 
 } // namespace glyma::core

@@ -34,9 +34,23 @@ public:
     // back to a default when empty.
     [[nodiscard]] core::TextLayerData textData() const;
 
+    // Move keyboard focus to the real text input widget (the QPlainTextEdit),
+    // not the panel container. When selectAll is true the existing content is
+    // selected so a fresh placement can be typed over immediately.
+    void focusEditor(bool selectAll = false);
+
 signals:
     void textEdited(const core::TextLayerData& data);
     void rasterizeRequested();
+    // Emitted when the user presses Escape inside the text editor, asking the
+    // owner to discard the in-progress edit and restore the previous payload.
+    void editingCancelled();
+    // Emitted when the text editor gains or loses keyboard focus. The owner
+    // uses it to suppress global single-key tool shortcuts while typing.
+    void editorFocusChanged(bool focused);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void buildUi();
