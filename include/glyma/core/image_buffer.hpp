@@ -29,6 +29,13 @@ public:
 
     [[nodiscard]] const std::vector<Pixel>& pixels() const noexcept;
 
+    // Mutable row-major pixel storage, tightly packed (width * height entries).
+    // Exposed for bulk interop (for example decoding from an external image
+    // library) where per-pixel setPixel calls would be wasteful. The size is
+    // always width() * height().
+    [[nodiscard]] Pixel* data() noexcept;
+    [[nodiscard]] const Pixel* data() const noexcept;
+
 private:
     std::uint32_t width_;
     std::uint32_t height_;

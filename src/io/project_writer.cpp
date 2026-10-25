@@ -102,7 +102,7 @@ void ProjectWriter::save(const Document& document, const std::string& path) {
 
     nlohmann::json manifest;
     manifest["format"] = "glyma";
-    manifest["version"] = 1;
+    manifest["version"] = 2;
     manifest["name"] = std::string(document.name());
     manifest["width"] = document.width();
     manifest["height"] = document.height();
@@ -131,6 +131,37 @@ void ProjectWriter::save(const Document& document, const std::string& path) {
         lj["width"] = layer.width();
         lj["height"] = layer.height();
         lj["data"] = dataName;
+
+        if (layer.isText()) {
+            const TextLayerData& text = layer.text();
+            lj["type"] = "text";
+            nlohmann::json tj;
+            tj["content"] = text.text;
+            tj["fontFamily"] = text.style.fontFamily;
+            tj["fontSize"] = text.style.fontSize;
+            tj["fontWeight"] = text.style.fontWeight;
+            tj["italic"] = text.style.italic;
+            tj["color"] = {
+                {"r", text.style.color.r},
+                {"g", text.style.color.g},
+                {"b", text.style.color.b},
+                {"a", text.style.color.a},
+            };
+            tj["lineSpacing"] = text.style.lineSpacing;
+            tj["letterSpacing"] = text.style.letterSpacing;
+            tj["horizontalAlign"] =
+                textHorizontalAlignName(text.style.horizontalAlign);
+            tj["verticalAlign"] =
+                textVerticalAlignName(text.style.verticalAlign);
+            tj["wordWrap"] = text.style.wordWrap;
+            tj["autoSize"] = text.autoSize;
+            tj["boxWidth"] = text.boxWidth;
+            tj["boxHeight"] = text.boxHeight;
+            lj["text"] = std::move(tj);
+        } else {
+            lj["type"] = "raster";
+        }
+
         layersArr.push_back(std::move(lj));
 
         const auto& buf = layer.buffer();

@@ -66,6 +66,11 @@ bool RemoveLayerCommand::execute(Document& document) {
     capturedName_ = layer->name();
     // Deep copy buffer
     capturedBuffer_ = layer->buffer();
+    if (layer->isText()) {
+        capturedText_ = layer->text();
+    } else {
+        capturedText_.reset();
+    }
     capturedVisible_ = layer->visible();
     capturedOpacity_ = layer->opacity();
     capturedX_ = layer->x();
@@ -83,8 +88,11 @@ bool RemoveLayerCommand::undo(Document& document) {
         return false;
     }
     try {
-        Layer restored(capturedId_, capturedName_, capturedBuffer_.width(), capturedBuffer_.height());
-        // Copy buffer contents
+        Layer restored = capturedText_.has_value()
+            ? Layer(capturedId_, capturedName_, *capturedText_)
+            : Layer(capturedId_, capturedName_,
+                    capturedBuffer_.width(), capturedBuffer_.height());
+        // Copy buffer contents (the rendered cache for text layers).
         restored.buffer() = capturedBuffer_;
         restored.setVisible(capturedVisible_);
         restored.setOpacity(capturedOpacity_);

@@ -34,6 +34,7 @@ public:
         SelectEllipse,
         BucketFill,
         Crop,
+        Text,
     };
 
     static constexpr double minZoom = 0.05;
@@ -93,6 +94,9 @@ signals:
     void selectionDragCancelled();
     // Emitted when the bucket fill tool is clicked at a document position.
     void bucketFillRequested(const QPointF& documentPosition);
+    // Emitted when the text tool is clicked at a document position; the window
+    // creates a text layer there and focuses the typography controls.
+    void textPlacementRequested(const QPointF& documentPosition);
     // Emitted whenever the crop rectangle is created or adjusted. An empty
     // rectangle means there is no usable crop area.
     void cropRectChanged(const QRectF& documentRect);

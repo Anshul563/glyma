@@ -331,7 +331,7 @@ void CanvasView::setActiveTool(Tool tool) {
     panning_ = false;
     cropDragging_ = false;
     cropHandle_ = CropHandle::None;
-    setCursor(Qt::CrossCursor);
+    setCursor(tool == Tool::Text ? Qt::IBeamCursor : Qt::CrossCursor);
     selectionItem_->hide();
     updateCropItem();
 }
@@ -556,6 +556,9 @@ void CanvasView::mousePressEvent(QMouseEvent* event) {
             break;
         case Tool::BucketFill:
             emit bucketFillRequested(documentPos);
+            break;
+        case Tool::Text:
+            emit textPlacementRequested(documentPos);
             break;
         case Tool::Crop: {
             cropStartPoint_ = documentPos;

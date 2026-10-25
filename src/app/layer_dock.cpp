@@ -2,10 +2,15 @@
 
 #include <cmath>
 
+#include <QColor>
+#include <QFont>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QPainter>
+#include <QPixmap>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStyle>
@@ -33,6 +38,24 @@ QToolButton* makeToolButton(
     button->setAutoRaise(true);
     button->setFixedSize(26, 26);
     return button;
+}
+
+// Small "T" badge marking text layers in the stack list.
+QIcon textLayerIcon() {
+    static const QIcon icon = [] {
+        QPixmap pixmap(16, 16);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        QFont font = painter.font();
+        font.setBold(true);
+        font.setPixelSize(13);
+        painter.setFont(font);
+        painter.setPen(QColor(70, 70, 70));
+        painter.drawText(pixmap.rect(), Qt::AlignCenter, QStringLiteral("T"));
+        painter.end();
+        return QIcon(pixmap);
+    }();
+    return icon;
 }
 
 } // namespace
@@ -159,6 +182,10 @@ void LayerDock::refresh(const core::LayerStack& stack, core::LayerId selectedId)
             static_cast<int>(std::lround(it->opacity() * 100.0F))
         );
         item->setData(nameRole, QString::fromStdString(it->name()));
+        if (it->isText()) {
+            item->setIcon(textLayerIcon());
+            item->setToolTip(tr("Text layer"));
+        }
         if (it->id() == selectedId) {
             selectedItem = item;
         }

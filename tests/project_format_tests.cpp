@@ -194,7 +194,7 @@ int main() {
     {
         const auto path = tmp / "bad_version.glyma";
         auto m = baseManifest();
-        m["version"] = 2;
+        m["version"] = 3;
         writeArchive(path, {{"manifest.json", m.dump()}});
         bool threw = false;
         try {

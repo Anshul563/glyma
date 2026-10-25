@@ -70,4 +70,12 @@ const std::vector<Pixel>& ImageBuffer::pixels() const noexcept {
     return pixels_;
 }
 
+Pixel* ImageBuffer::data() noexcept {
+    return pixels_.data();
+}
+
+const Pixel* ImageBuffer::data() const noexcept {
+    return pixels_.data();
+}
+
 } // namespace glyma::core

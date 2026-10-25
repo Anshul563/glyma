@@ -1,13 +1,23 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "glyma/core/image_buffer.hpp"
+#include "glyma/core/text_layer.hpp"
 
 namespace glyma::core {
 
 using LayerId = std::uint64_t;
+
+// Discriminates the payload a layer carries. Raster layers paint pixels
+// directly; text layers keep editable text metadata and use their ImageBuffer
+// as a rendered cache maintained by the application renderer.
+enum class LayerType : std::uint8_t {
+    Raster,
+    Text,
+};
 
 // A single drawable layer in a document.
 //
@@ -36,6 +46,12 @@ public:
         std::uint32_t height
     );
 
+    // Text-layer constructors. The buffer starts as a 1x1 transparent cache
+    // until the renderer produces the first frame (or as boxWidth x boxHeight
+    // for fixed-size boxes). Throws std::invalid_argument for invalid data.
+    Layer(std::string name, TextLayerData text);
+    Layer(LayerId id, std::string name, TextLayerData text);
+
     Layer(const Layer&) = default;
     Layer(Layer&&) noexcept = default;
     Layer& operator=(const Layer&) = default;
@@ -53,6 +69,21 @@ public:
 
     [[nodiscard]] std::uint32_t width() const noexcept;
     [[nodiscard]] std::uint32_t height() const noexcept;
+
+    [[nodiscard]] LayerType type() const noexcept;
+    [[nodiscard]] bool isRaster() const noexcept;
+    [[nodiscard]] bool isText() const noexcept;
+
+    // Text payload accessors. The const/non-const text() accessors throw
+    // std::logic_error when the layer is not a text layer.
+    [[nodiscard]] const TextLayerData& text() const;
+    [[nodiscard]] TextLayerData& text();
+    // Promote this layer to a text layer and store `data`. Throws
+    // std::invalid_argument for invalid data.
+    void setTextData(TextLayerData data);
+    // Drop the text payload, converting the layer to a raster layer that keeps
+    // its current rendered pixels. Returns false when already raster.
+    bool rasterize() noexcept;
 
     [[nodiscard]] bool visible() const noexcept;
     void setVisible(bool visible) noexcept;
@@ -74,6 +105,8 @@ private:
     LayerId id_;
     std::string name_;
     ImageBuffer buffer_;
+    LayerType type_{LayerType::Raster};
+    std::optional<TextLayerData> text_;
     bool visible_{true};
     float opacity_{1.0F};
     std::int32_t x_{0};

@@ -7,10 +7,15 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QColor>
+#include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QImage>
 #include <QListWidget>
 #include <QMetaObject>
+#include <QPlainTextEdit>
+#include <QPointF>
+#include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -22,11 +27,14 @@
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/main_window.hpp"
 #include "glyma/app/qt_image.hpp"
+#include "glyma/app/text_renderer.hpp"
+#include "glyma/app/typography_panel.hpp"
 #include "glyma/core/adjustments.hpp"
 #include "glyma/core/document.hpp"
 #include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
 #include "glyma/core/selection.hpp"
+#include "glyma/core/text_layer.hpp"
 #include "glyma/core/transform.hpp"
 
 namespace {
@@ -35,6 +43,8 @@ using glyma::app::AdjustmentDialog;
 using glyma::app::AppController;
 using glyma::app::CanvasView;
 using glyma::app::MainWindow;
+using glyma::app::TextRenderer;
+using glyma::app::TypographyPanel;
 using glyma::app::toQImage;
 using glyma::core::AdjustmentSettings;
 using glyma::core::BrushMode;
@@ -46,6 +56,9 @@ using glyma::core::Layer;
 using glyma::core::LayerId;
 using glyma::core::Pixel;
 using glyma::core::Selection;
+using glyma::core::TextHorizontalAlign;
+using glyma::core::TextLayerData;
+using glyma::core::TextStyle;
 
 bool nearlyEqual(double lhs, double rhs) {
     return std::abs(lhs - rhs) < 1e-9;
@@ -902,6 +915,199 @@ void testMainWindowTransformActions() {
     assert(controller.document().height() == 4);
 }
 
+std::size_t opaquePixelCount(const ImageBuffer& buffer) {
+    std::size_t count = 0;
+    for (std::uint32_t y = 0; y < buffer.height(); ++y) {
+        for (std::uint32_t x = 0; x < buffer.width(); ++x) {
+            if (buffer.getPixel(x, y).a > 0) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+void testTextRendererLayout() {
+    // Auto-sized text measures a positive box and rasterizes visible glyphs.
+    TextLayerData autoData;
+    autoData.text = "Hi";
+    autoData.style.fontSize = 32.0F;
+    const auto autoResult = TextRenderer::render(autoData);
+    assert(autoResult.boxWidth > 1);
+    assert(autoResult.boxHeight > 1);
+    assert(autoResult.image.width() == autoResult.boxWidth);
+    assert(autoResult.image.height() == autoResult.boxHeight);
+    assert(opaquePixelCount(autoResult.image) > 0);
+
+    // Multiple lines are taller than a single line.
+    TextLayerData multi = autoData;
+    multi.text = "Hi\nThere";
+    const auto multiResult = TextRenderer::render(multi);
+    assert(multiResult.boxHeight > autoResult.boxHeight);
+    assert(opaquePixelCount(multiResult.image) > opaquePixelCount(autoResult.image));
+
+    // A fixed box is honoured exactly.
+    TextLayerData fixed;
+    fixed.text = "Boxed";
+    fixed.autoSize = false;
+    fixed.boxWidth = 64;
+    fixed.boxHeight = 40;
+    const auto fixedResult = TextRenderer::render(fixed);
+    assert(fixedResult.boxWidth == 64);
+    assert(fixedResult.boxHeight == 40);
+    assert(fixedResult.image.width() == 64);
+    assert(fixedResult.image.height() == 40);
+
+    // Empty text still yields a valid 1x1-or-larger buffer with no glyphs.
+    TextLayerData empty;
+    empty.text.clear();
+    const auto emptyResult = TextRenderer::render(empty);
+    assert(emptyResult.boxWidth >= 1);
+    assert(emptyResult.boxHeight >= 1);
+    assert(opaquePixelCount(emptyResult.image) == 0);
+}
+
+void testTextRendererHorizontalPosition() {
+    // Verify right-aligned text sits further right than left-aligned text.
+    TextLayerData data;
+    data.text = "I";
+    data.autoSize = false;
+    data.boxWidth = 200;
+    data.boxHeight = 40;
+    data.style.fontSize = 24.0F;
+
+    data.style.horizontalAlign = TextHorizontalAlign::Left;
+    const auto left = TextRenderer::render(data);
+    data.style.horizontalAlign = TextHorizontalAlign::Right;
+    const auto right = TextRenderer::render(data);
+
+    const auto centreOfMass = [](const ImageBuffer& image) {
+        double sum = 0.0;
+        double weighted = 0.0;
+        for (std::uint32_t x = 0; x < image.width(); ++x) {
+            for (std::uint32_t y = 0; y < image.height(); ++y) {
+                const double alpha = image.getPixel(x, y).a;
+                sum += alpha;
+                weighted += alpha * static_cast<double>(x);
+            }
+        }
+        return sum > 0.0 ? weighted / sum : 0.0;
+    };
+
+    assert(centreOfMass(right.image) > centreOfMass(left.image) + 1.0);
+}
+
+void testControllerTextIntegration() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Text"), 48, 48));
+    assert(controller.document().layerCount() == 1);
+
+    TextLayerData data;
+    data.text = "Hi";
+    data.style.fontSize = 28.0F;
+    assert(controller.addTextLayer(data, 4, 5));
+    assert(controller.document().layerCount() == 2);
+
+    const LayerId id = controller.selectedLayerId();
+    const Layer* layer = controller.document().findLayer(id);
+    assert(layer != nullptr);
+    assert(layer->isText());
+    assert(layer->x() == 4 && layer->y() == 5);
+
+    const TextLayerData* stored = controller.textData(id);
+    assert(stored != nullptr);
+    assert(stored->text == "Hi");
+
+    // Pixel tools skip text layers (their cache is renderer-owned).
+    assert(!controller.beginBrushStroke(6.0, 6.0));
+    assert(!controller.bucketFill(6.0, 6.0));
+
+    // The controller refreshes the render cache, so compositing shows glyphs.
+    const ImageBuffer rendered = controller.render();
+    assert(opaquePixelCount(rendered) > 0);
+
+    // Editing typography is undoable.
+    TextLayerData edited = *stored;
+    edited.style.fontSize = 40.0F;
+    edited.text = "Hello";
+    assert(controller.setTextData(id, edited));
+    assert(controller.textData(id)->style.fontSize == 40.0F);
+    assert(controller.undo());
+    assert(controller.textData(id)->text == "Hi");
+    assert(controller.redo());
+    assert(controller.textData(id)->text == "Hello");
+
+    // Rasterizing drops editability but keeps the rendered pixels.
+    assert(controller.rasterizeTextLayer(id));
+    assert(controller.textData(id) == nullptr);
+    assert(!controller.document().findLayer(id)->isText());
+    assert(controller.undo());
+    assert(controller.document().findLayer(id)->isText());
+
+    // Invalid payloads are rejected without touching history.
+    TextLayerData invalid;
+    invalid.style.fontSize = 0.0F;
+    assert(!controller.addTextLayer(invalid));
+    assert(!controller.setTextData(id, invalid));
+
+    // Undo the typography edit, then the original add.
+    assert(controller.undo());
+    assert(controller.undo());
+    assert(controller.document().layerCount() == 1);
+}
+
+void testMainWindowTextTool() {
+    MainWindow window;
+    auto* textAction =
+        window.findChild<QAction*>(QStringLiteral("actionToolText"));
+    assert(textAction != nullptr);
+    assert(textAction->isCheckable());
+
+    auto* canvas = window.findChild<CanvasView*>(QStringLiteral("canvasView"));
+    assert(canvas != nullptr);
+
+    textAction->trigger();
+    QCoreApplication::processEvents();
+    assert(textAction->isChecked());
+    assert(canvas->activeTool() == CanvasView::Tool::Text);
+
+    auto* panel =
+        window.findChild<TypographyPanel*>(QStringLiteral("typographyPanel"));
+    assert(panel != nullptr);
+    auto* content =
+        window.findChild<QPlainTextEdit*>(QStringLiteral("textContentEdit"));
+    assert(content != nullptr);
+
+    AppController& controller = window.controller();
+    const std::size_t before = controller.document().layerCount();
+
+    // Placing text creates a layer at the clicked document position.
+    assert(QMetaObject::invokeMethod(
+        canvas, "textPlacementRequested", Qt::DirectConnection,
+        Q_ARG(QPointF, QPointF(12.0, 20.0))));
+    QCoreApplication::processEvents();
+    assert(controller.document().layerCount() == before + 1);
+
+    const LayerId id = controller.selectedLayerId();
+    assert(controller.textData(id) != nullptr);
+    assert(content->isEnabled());
+    assert(content->toPlainText() == QStringLiteral("Text"));
+
+    // Editing the content drives the controller through the panel signal.
+    content->setPlainText(QStringLiteral("Caption"));
+    QCoreApplication::processEvents();
+    assert(controller.textData(id) != nullptr);
+    assert(controller.textData(id)->text == "Caption");
+
+    // The rasterize button converts the layer.
+    auto* rasterize =
+        window.findChild<QPushButton*>(QStringLiteral("textRasterizeButton"));
+    assert(rasterize != nullptr);
+    rasterize->click();
+    QCoreApplication::processEvents();
+    assert(!controller.document().findLayer(id)->isText());
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -936,6 +1142,10 @@ int main(int argc, char* argv[]) {
     testControllerAdjustmentCancelRestores();
     testControllerTransformIntegration();
     testMainWindowTransformActions();
+    testTextRendererLayout();
+    testTextRendererHorizontalPosition();
+    testControllerTextIntegration();
+    testMainWindowTextTool();
     testControllerFailurePaths();
     testControllerFileOperations();
 

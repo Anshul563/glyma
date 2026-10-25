@@ -40,6 +40,9 @@
 #include "glyma/app/canvas_view.hpp"
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/qt_image.hpp"
+#include "glyma/app/text_renderer.hpp"
+#include "glyma/app/typography_panel.hpp"
+#include "glyma/core/text_layer.hpp"
 #include "glyma/core/transform.hpp"
 
 namespace glyma::app {
@@ -415,15 +418,26 @@ void MainWindow::createToolOptions() {
         style()->standardIcon(QStyle::SP_DialogApplyButton)
     );
 
+    textToolAction_ = makeAction(
+        this, tr("&Text"), QKeySequence(QStringLiteral("T")),
+        QStringLiteral("actionToolText")
+    );
+    textToolAction_->setCheckable(true);
+    textToolAction_->setIcon(
+        style()->standardIcon(QStyle::SP_FileDialogInfoView)
+    );
+
     cropAction_->setCheckable(true);
 
     toolGroup_->addAction(rectangleSelectAction_);
     toolGroup_->addAction(ellipseSelectAction_);
     toolGroup_->addAction(bucketFillAction_);
+    toolGroup_->addAction(textToolAction_);
     toolGroup_->addAction(cropAction_);
     toolBar->addAction(rectangleSelectAction_);
     toolBar->addAction(ellipseSelectAction_);
     toolBar->addAction(bucketFillAction_);
+    toolBar->addAction(textToolAction_);
     toolBar->addAction(cropAction_);
     toolBar->addAction(cropApplyAction_);
     toolBar->addAction(cropCancelAction_);
@@ -537,6 +551,11 @@ void MainWindow::createToolOptions() {
             canvas_->setActiveTool(CanvasView::Tool::Crop);
         }
     });
+    connect(textToolAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::Text);
+        }
+    });
     connect(clearSelectionAction_, &QAction::triggered, this, [this] {
         controller_.clearSelection();
     });
@@ -576,7 +595,19 @@ void MainWindow::createDocks() {
     layerDock_->setMinimumWidth(220);
     dock->setWidget(layerDock_);
     addDockWidget(Qt::RightDockWidgetArea, dock);
-    resizeDocks({dock}, {280}, Qt::Horizontal);
+
+    auto* typographyDock = new QDockWidget(tr("Typography"), this);
+    typographyDock->setObjectName(QStringLiteral("typographyDock"));
+    typographyDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    typographyDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
+    );
+    typographyPanel_ = new TypographyPanel(typographyDock);
+    typographyPanel_->setMinimumWidth(220);
+    typographyDock->setWidget(typographyPanel_);
+    addDockWidget(Qt::RightDockWidgetArea, typographyDock);
+
+    resizeDocks({dock, typographyDock}, {280, 280}, Qt::Horizontal);
 }
 
 void MainWindow::connectSignals() {
@@ -610,6 +641,18 @@ void MainWindow::connectSignals() {
     connect(canvas_, &CanvasView::bucketFillRequested, this, [this](const QPointF& position) {
         controller_.bucketFill(position.x(), position.y());
     });
+    connect(canvas_, &CanvasView::textPlacementRequested, this, [this](const QPointF& position) {
+        core::TextLayerData data;
+        data.text = tr("Text").toStdString();
+        if (controller_.addTextLayer(
+                data,
+                static_cast<std::int32_t>(std::lround(position.x())),
+                static_cast<std::int32_t>(std::lround(position.y()))
+            )) {
+            refreshTypography();
+            typographyPanel_->setFocus(Qt::OtherFocusReason);
+        }
+    });
     connect(canvas_, &CanvasView::cropRectChanged, this, [this](const QRectF&) {
         updateActions();
     });
@@ -631,6 +674,7 @@ void MainWindow::connectSignals() {
     });
     connect(&controller_, &AppController::layersChanged, this, [this] {
         refreshLayers();
+        refreshTypography();
         refreshStatus();
         updateActions();
     });
@@ -640,6 +684,7 @@ void MainWindow::connectSignals() {
         this,
         [this](quint64 layerId) {
             layerDock_->setSelectedLayer(static_cast<core::LayerId>(layerId));
+            refreshTypography();
         }
     );
     connect(&controller_, &AppController::historyChanged, this, [this] {
@@ -703,6 +748,18 @@ void MainWindow::connectSignals() {
         },
         Qt::QueuedConnection
     );
+
+    connect(
+        typographyPanel_,
+        &TypographyPanel::textEdited,
+        this,
+        [this](const core::TextLayerData& data) {
+            controller_.setTextData(controller_.selectedLayerId(), data);
+        }
+    );
+    connect(typographyPanel_, &TypographyPanel::rasterizeRequested, this, [this] {
+        controller_.rasterizeTextLayer(controller_.selectedLayerId());
+    });
 }
 
 void MainWindow::applyStyle() {
@@ -862,6 +919,15 @@ void MainWindow::refreshLayers() {
     layerDock_->refresh(
         controller_.document().layerStack(),
         controller_.selectedLayerId()
+    );
+}
+
+void MainWindow::refreshTypography() {
+    if (typographyPanel_ == nullptr) {
+        return;
+    }
+    typographyPanel_->setTextData(
+        controller_.textData(controller_.selectedLayerId())
     );
 }
 

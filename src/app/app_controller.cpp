@@ -9,6 +9,7 @@
 
 #include <QFileInfo>
 
+#include "glyma/app/text_renderer.hpp"
 #include "glyma/core/commands.hpp"
 #include "glyma/core/pixel_edit.hpp"
 #include "glyma/io/document_io.hpp"
@@ -95,7 +96,9 @@ bool AppController::beginBrushStroke(double documentX, double documentY) {
     }
 
     core::Layer* layer = document_->findLayer(selectedLayerId_);
-    if (layer == nullptr || !layer->visible()) {
+    // Text layers render from their payload; painting their cache would be
+    // discarded on the next refresh, so pixel tools skip them.
+    if (layer == nullptr || !layer->visible() || layer->isText()) {
         return false;
     }
 
@@ -304,7 +307,7 @@ bool AppController::bucketFill(double documentX, double documentY) {
     }
 
     core::Layer* layer = document_->findLayer(selectedLayerId_);
-    if (layer == nullptr || !layer->visible()) {
+    if (layer == nullptr || !layer->visible() || layer->isText()) {
         return false;
     }
 
@@ -353,7 +356,7 @@ bool AppController::beginAdjustment() {
     }
 
     core::Layer* layer = document_->findLayer(selectedLayerId_);
-    if (layer == nullptr || !layer->visible()) {
+    if (layer == nullptr || !layer->visible() || layer->isText()) {
         return false;
     }
 
@@ -484,7 +487,12 @@ void AppController::ensureSelection() {
     selectedLayerId_ = topLayerId(*document_);
 }
 
+void AppController::refreshTextCaches() {
+    TextRenderer::refreshDocument(*document_);
+}
+
 void AppController::emitDocumentState(bool selectionMayHaveChanged) {
+    refreshTextCaches();
     emit documentChanged();
     emit layersChanged();
     if (selectionMayHaveChanged) {
@@ -891,6 +899,74 @@ void AppController::addLayer() {
     }
     selectedLayerId_ = topLayerId(*document_);
     emitDocumentState(true);
+}
+
+bool AppController::addTextLayer(
+    const core::TextLayerData& data,
+    std::int32_t x,
+    std::int32_t y
+) {
+    if (!data.isValid()) {
+        emit errorOccurred(tr("Text properties are outside the supported range."));
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    cancelSelection();
+    auto command = std::make_unique<core::AddTextLayerCommand>(
+        nextLayerName(), data, x, y
+    );
+    if (!history_.execute(std::move(command), *document_)) {
+        return false;
+    }
+    selectedLayerId_ = topLayerId(*document_);
+    emitDocumentState(true);
+    return true;
+}
+
+bool AppController::setTextData(core::LayerId id, const core::TextLayerData& data) {
+    if (!data.isValid()) {
+        emit errorOccurred(tr("Text properties are outside the supported range."));
+        return false;
+    }
+    core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isText()) {
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    auto command = std::make_unique<core::SetTextDataCommand>(id, data);
+    if (!history_.execute(std::move(command), *document_)) {
+        return false;
+    }
+    emitDocumentState(false);
+    return true;
+}
+
+bool AppController::rasterizeTextLayer(core::LayerId id) {
+    core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isText()) {
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    auto command = std::make_unique<core::RasterizeTextLayerCommand>(id);
+    if (!history_.execute(std::move(command), *document_)) {
+        return false;
+    }
+    emitDocumentState(false);
+    return true;
+}
+
+const core::TextLayerData* AppController::textData(core::LayerId id) const noexcept {
+    const core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isText()) {
+        return nullptr;
+    }
+    return &layer->text();
 }
 
 void AppController::removeLayer(core::LayerId id) {

@@ -51,6 +51,23 @@ Layer::Layer(
     validateOpacity(opacity_);
 }
 
+Layer::Layer(std::string name, TextLayerData text)
+    : Layer(generateId(), std::move(name), std::move(text)) {}
+
+Layer::Layer(LayerId id, std::string name, TextLayerData text)
+    : id_(id),
+      name_(std::move(name)),
+      buffer_(1, 1) {
+    validateName(name_);
+    validateOpacity(opacity_);
+    text.validate();
+    type_ = LayerType::Text;
+    text_ = std::move(text);
+    if (!text_->autoSize && text_->boxWidth > 0 && text_->boxHeight > 0) {
+        buffer_ = ImageBuffer(text_->boxWidth, text_->boxHeight);
+    }
+}
+
 LayerId Layer::id() const noexcept {
     return id_;
 }
@@ -78,6 +95,47 @@ std::uint32_t Layer::width() const noexcept {
 
 std::uint32_t Layer::height() const noexcept {
     return buffer_.height();
+}
+
+LayerType Layer::type() const noexcept {
+    return type_;
+}
+
+bool Layer::isRaster() const noexcept {
+    return type_ == LayerType::Raster;
+}
+
+bool Layer::isText() const noexcept {
+    return type_ == LayerType::Text;
+}
+
+const TextLayerData& Layer::text() const {
+    if (!text_.has_value()) {
+        throw std::logic_error("Layer is not a text layer.");
+    }
+    return *text_;
+}
+
+TextLayerData& Layer::text() {
+    if (!text_.has_value()) {
+        throw std::logic_error("Layer is not a text layer.");
+    }
+    return *text_;
+}
+
+void Layer::setTextData(TextLayerData data) {
+    data.validate();
+    type_ = LayerType::Text;
+    text_ = std::move(data);
+}
+
+bool Layer::rasterize() noexcept {
+    if (type_ != LayerType::Text) {
+        return false;
+    }
+    type_ = LayerType::Raster;
+    text_.reset();
+    return true;
 }
 
 bool Layer::visible() const noexcept {

@@ -77,14 +77,19 @@ remains Qt-independent; the application layer owns the active `Document`, its
 - Rectangle and ellipse selection tools with clear/invert actions, plus a
   bucket fill tool with tolerance and opacity controls that fills with the
   foreground color.
+- Text tool with a Typography panel for font family, size, weight, italic,
+  color, alignment, line/letter spacing, word wrap, and auto/fixed box sizing;
+  text layers are marked with a `T` badge in the Layers panel and can be
+  rasterized on demand.
 - Image adjustments (exposure, brightness, contrast, saturation, grayscale,
   gaussian blur, and sharpen) in a live-preview dialog under the Image menu.
 - Canvas crop, canvas/image resize, 90/180 and arbitrary rotation, and
   horizontal/vertical flipping under the Image menu, plus per-layer rotate,
   flip, scale, and move commands under the Layer menu.
 - Undo/redo for brush/eraser strokes, selection changes, bucket fills,
-  image adjustments, and layer add/remove/reorder/rename, visibility, and
-  opacity changes through the engine command history.
+  image adjustments, text add/edit/rasterize, and layer
+  add/remove/reorder/rename, visibility, and opacity changes through the engine
+  command history.
 - Dark neutral Qt stylesheet with a neutral workspace around the canvas.
 
 File and Edit actions use the existing engine serialization, PNG, and
@@ -188,6 +193,31 @@ single-layer operation has a matching undoable command.
 - Each transform is a single command-history entry; undo and redo restore the
   exact prior state (dimensions, layer geometry and pixels, and selection).
 
+## Text Layers and Typography
+
+Text layers keep their content editable instead of baking pixels immediately.
+The Qt-free model lives in `include/glyma/core/text_layer.hpp` and
+`src/engine/text_layer.cpp`; rendering lives in the application layer
+(`include/glyma/app/text_renderer.hpp`), so the engine never depends on Qt.
+
+- `TextLayerData` stores the string, a `TextStyle` (font family, pixel size,
+  CSS-style weight 1-1000, italic, RGBA color, line spacing, letter spacing,
+  horizontal/vertical alignment, word wrap), an auto-size flag, and a fixed box
+  size. Payloads are validated against shared limits (`maxBoxDimension`,
+  `maxPixelCount`).
+- A text layer's `ImageBuffer` is a regenerable render cache. `TextRenderer`
+  lays out and rasterizes the payload with Qt's font engine (multi-line, word
+  wrap, alignment, spacing), measures auto-sized text, and refreshes every text
+  cache after each document change.
+- `AddTextLayerCommand`, `SetTextDataCommand`, and `RasterizeTextLayerCommand`
+  make creation, typography edits, and rasterization undoable. Removing a text
+  layer preserves its payload so undo restores editability.
+- Transforms keep text editable where the glyphs remain upright: crop, canvas
+  resize, 90° document rotation, and flips reposition the box (swapping fixed
+  box dimensions on 90°); resampling scales the font and box. Transforms that
+  cannot preserve upright glyphs (180°/arbitrary single-layer rotation, flips)
+  bake the pixels through the command snapshot.
+
 ## PNG Import/Export
 
 - Use `glyma::core::PngReader::read(path)` to decode supported PNG files (RGB, RGBA, grayscale, grayscale+alpha, palette with transparency) into RGBA8 `ImageBuffer`.
@@ -220,12 +250,12 @@ glyma::core::ProjectWriter::save(document, "example.glyma");
 auto reopened = glyma::core::ProjectReader::load("example.glyma");
 ```
 
-### Manifest schema (version 1)
+### Manifest schema (version 2)
 
 ```json
 {
   "format": "glyma",
-  "version": 1,
+  "version": 2,
   "name": "Example",
   "width": 1920,
   "height": 1080,
@@ -234,6 +264,7 @@ auto reopened = glyma::core::ProjectReader::load("example.glyma");
     {
       "id": 1,
       "name": "Layer 1",
+      "type": "raster",
       "visible": true,
       "opacity": 1.0,
       "x": 0,
@@ -241,6 +272,34 @@ auto reopened = glyma::core::ProjectReader::load("example.glyma");
       "width": 1920,
       "height": 1080,
       "data": "layers/layer-1.rgba"
+    },
+    {
+      "id": 2,
+      "name": "Caption",
+      "type": "text",
+      "visible": true,
+      "opacity": 1.0,
+      "x": 64,
+      "y": 480,
+      "width": 512,
+      "height": 96,
+      "data": "layers/layer-2.rgba",
+      "text": {
+        "content": "Hello\nWorld",
+        "fontFamily": "DejaVu Sans",
+        "fontSize": 48.0,
+        "fontWeight": 700,
+        "italic": false,
+        "color": { "r": 255, "g": 255, "b": 255, "a": 255 },
+        "lineSpacing": 1.0,
+        "letterSpacing": 0.0,
+        "horizontalAlign": "center",
+        "verticalAlign": "middle",
+        "wordWrap": true,
+        "autoSize": false,
+        "boxWidth": 512,
+        "boxHeight": 96
+      }
     }
   ]
 }
@@ -248,14 +307,17 @@ auto reopened = glyma::core::ProjectReader::load("example.glyma");
 
 `background.type` is either `"transparent"` or `"solid"`. Layer order in the
 `layers` array is bottom-to-top. Layer IDs are stable across save/load. Pixel
-data files contain `width * height * 4` bytes in RGBA order.
+data files contain `width * height * 4` bytes in RGBA order. `type` defaults to
+`"raster"` when omitted; text layers additionally carry a `text` object and
+store their rendered cache in the pixel data file.
 
 ### Versioning policy
 
 The manifest carries an explicit `format` identifier and integer `version`.
-Version 1 is the only supported version. Future versions must either stay
-backward compatible or provide explicit migrations; unsupported versions are
-rejected rather than guessed.
+Version 1 stores raster layers only and is migrated transparently on load by
+treating every layer as raster. Version 2 adds text layers. Future versions must
+either stay backward compatible or provide explicit migrations; unsupported
+versions are rejected rather than guessed.
 
 ### Security limits
 
@@ -285,4 +347,6 @@ Undo/redo history is session-only and is not serialized.
   reordering.
 - No undo/redo memory budgeting beyond count limits.
 - No color profile/ICC or wide-gamut management.
-- No autosave, recovery snapshots, encryption, or format migration yet.
+- Text layers use a single style per layer (no per-character rich text),
+  text-on-path, or vertical writing.
+- No autosave, recovery snapshots, or encryption yet.

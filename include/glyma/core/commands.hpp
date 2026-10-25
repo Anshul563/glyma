@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "glyma/core/command.hpp"
@@ -44,6 +45,8 @@ private:
     LayerId capturedId_{Layer::invalidId};
     std::string capturedName_;
     ImageBuffer capturedBuffer_{1, 1};
+    // Preserved so removing and undoing a text layer keeps its editable text.
+    std::optional<TextLayerData> capturedText_;
     bool capturedVisible_{true};
     float capturedOpacity_{1.0F};
     std::int32_t capturedX_{0};

@@ -11,4 +11,9 @@ namespace glyma::app {
 // after the source buffer is destroyed.
 [[nodiscard]] QImage toQImage(const core::ImageBuffer& buffer);
 
+// Convert a QImage into an engine RGBA8 buffer (straight alpha). The image is
+// converted to RGBA8888 first if needed. Throws std::invalid_argument for a
+// null or empty image (the engine has no zero-sized buffer).
+[[nodiscard]] core::ImageBuffer toImageBuffer(const QImage& image);
+
 } // namespace glyma::app

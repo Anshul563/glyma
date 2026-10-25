@@ -16,6 +16,8 @@
 #include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
 #include "glyma/core/selection.hpp"
+#include "glyma/core/text_commands.hpp"
+#include "glyma/core/text_layer.hpp"
 #include "glyma/core/transform.hpp"
 
 namespace glyma::app {
@@ -140,6 +142,19 @@ public:
     void selectLayer(core::LayerId id);
     void addLayer();
     void removeLayer(core::LayerId id);
+
+    // Text layer API. Adding, editing, and rasterizing each record exactly one
+    // undoable command. Text layer buffers hold a regenerable render cache that
+    // is refreshed automatically after every document change.
+    bool addTextLayer(
+        const core::TextLayerData& data,
+        std::int32_t x = 0,
+        std::int32_t y = 0
+    );
+    bool setTextData(core::LayerId id, const core::TextLayerData& data);
+    bool rasterizeTextLayer(core::LayerId id);
+    [[nodiscard]] const core::TextLayerData* textData(core::LayerId id) const
+        noexcept;
     void renameLayer(core::LayerId id, const QString& name);
     void moveLayerUp(core::LayerId id);
     void moveLayerDown(core::LayerId id);
@@ -164,6 +179,7 @@ private:
     );
     void ensureSelection();
     void emitDocumentState(bool selectionMayHaveChanged);
+    void refreshTextCaches();
     void refreshModifiedState();
     bool commitTransform(core::CommandPtr command);
     void discardAdjustment();

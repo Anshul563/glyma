@@ -19,6 +19,7 @@ namespace glyma::app {
 
 class CanvasView;
 class LayerDock;
+class TypographyPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -42,6 +43,7 @@ private:
     void applyStyle();
     void refreshCanvas();
     void refreshLayers();
+    void refreshTypography();
     void refreshStatus();
     void updateActions();
     void updateTitle();
@@ -82,6 +84,7 @@ private:
     AppController controller_;
     CanvasView* canvas_{nullptr};
     LayerDock* layerDock_{nullptr};
+    TypographyPanel* typographyPanel_{nullptr};
     QLabel* statusInfo_{nullptr};
 
     QAction* newAction_{nullptr};
@@ -125,6 +128,7 @@ private:
     QAction* rectangleSelectAction_{nullptr};
     QAction* ellipseSelectAction_{nullptr};
     QAction* bucketFillAction_{nullptr};
+    QAction* textToolAction_{nullptr};
     QAction* clearSelectionAction_{nullptr};
     QAction* invertSelectionAction_{nullptr};
     QToolButton* colorButton_{nullptr};
