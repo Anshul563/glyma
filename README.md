@@ -81,13 +81,16 @@ remains Qt-independent; the application layer owns the active `Document`, its
   color, alignment, line/letter spacing, word wrap, and auto/fixed box sizing;
   text layers are marked with a `T` badge in the Layers panel and can be
   rasterized on demand.
+- Rectangle, rounded-rectangle, ellipse, line, arrow, and polygon shape tools
+  with a Shape panel for geometry, fill, stroke, and arrowhead editing; shape
+  layers are marked with a diamond badge and can be rasterized on demand.
 - Image adjustments (exposure, brightness, contrast, saturation, grayscale,
   gaussian blur, and sharpen) in a live-preview dialog under the Image menu.
 - Canvas crop, canvas/image resize, 90/180 and arbitrary rotation, and
   horizontal/vertical flipping under the Image menu, plus per-layer rotate,
   flip, scale, and move commands under the Layer menu.
 - Undo/redo for brush/eraser strokes, selection changes, bucket fills,
-  image adjustments, text add/edit/rasterize, and layer
+  image adjustments, text and shape add/edit/rasterize, and layer
   add/remove/reorder/rename, visibility, and opacity changes through the engine
   command history.
 - Dark neutral Qt stylesheet with a neutral workspace around the canvas.
@@ -218,6 +221,41 @@ The Qt-free model lives in `include/glyma/core/text_layer.hpp` and
   cannot preserve upright glyphs (180°/arbitrary single-layer rotation, flips)
   bake the pixels through the command snapshot.
 
+## Shape and Vector Layers
+
+Shape layers keep their geometry editable instead of baking pixels immediately.
+The Qt-free model lives in `include/glyma/core/shape_layer.hpp` and
+`src/engine/shape_layer.cpp`; rendering lives in the application layer
+(`include/glyma/app/shape_renderer.hpp`), so the engine never depends on Qt.
+
+- `ShapeLayerData` supports `Rectangle`, `RoundedRectangle`, `Ellipse`, `Line`,
+  `Arrow`, and `Polygon`. Box shapes store an `x`/`y`/`width`/`height` frame;
+  line/arrow shapes store `startX`/`startY`/`endX`/`endY`; polygons store an
+  ordered `points` list. All shapes carry `rotation`, `cornerRadius` (rounded
+  rectangles), a `ShapeFill` (enabled + RGBA color), a `ShapeStroke` (enabled +
+  RGBA color, width, and `Solid`/`Dashed`/`Dotted` style), and an `ArrowHead`
+  (start/end toggles + length/width) for arrows.
+- Payloads are validated against shared limits (`maxCoordinate`, `maxDimension`,
+  `maxStrokeWidth`, `maxPoints`) via `validate()`/`isValid()`.
+- Geometry helpers (`setRectGeometry`, `setLineGeometry`, `setPolygonGeometry`,
+  `syncShapeBounds`, `shapeGeometryBounds`, `shapeVisualBounds`, `translateShape`,
+  `scaleShape`, `rotateShape`, `flipShape`, `shapeHitTest`, `sanitizeShape`) keep
+  the payload and its bounding box consistent across edits and transforms.
+- A shape layer's `ImageBuffer` is a regenerable render cache. `ShapeRenderer`
+  builds a `QPainterPath`, fills and strokes it (dash patterns included), and
+  refreshes every shape cache after each document change.
+- `AddShapeLayerCommand`, `SetShapeDataCommand`, and `RasterizeShapeLayerCommand`
+  make creation, geometry edits, and rasterization undoable. Removing a shape
+  layer preserves its payload so undo restores editability.
+- The shape tool creates shapes by dragging (polygons are finished with
+  Enter/Return or a final click; Escape cancels). The Shape dock edits the
+  selected shape's type-specific geometry, fill, stroke, and arrow head, or
+  rasterizes it into pixels.
+- Transforms keep shapes editable where geometry maps cleanly: crop, canvas
+  resize, 90°/180° document rotation, flips, and resampling translate, scale,
+  rotate, and flip the payload. Transforms that cannot preserve the geometry
+  bake the pixels through the command snapshot.
+
 ## PNG Import/Export
 
 - Use `glyma::core::PngReader::read(path)` to decode supported PNG files (RGB, RGBA, grayscale, grayscale+alpha, palette with transparency) into RGBA8 `ImageBuffer`.
@@ -250,12 +288,12 @@ glyma::core::ProjectWriter::save(document, "example.glyma");
 auto reopened = glyma::core::ProjectReader::load("example.glyma");
 ```
 
-### Manifest schema (version 2)
+### Manifest schema (version 3)
 
 ```json
 {
   "format": "glyma",
-  "version": 2,
+  "version": 3,
   "name": "Example",
   "width": 1920,
   "height": 1080,
@@ -300,6 +338,40 @@ auto reopened = glyma::core::ProjectReader::load("example.glyma");
         "boxWidth": 512,
         "boxHeight": 96
       }
+    },
+    {
+      "id": 3,
+      "name": "Badge",
+      "type": "vector",
+      "visible": true,
+      "opacity": 1.0,
+      "x": 24,
+      "y": 24,
+      "width": 160,
+      "height": 160,
+      "data": "layers/layer-3.rgba",
+      "shape": {
+        "shapeType": "roundedRectangle",
+        "x": 24.0,
+        "y": 24.0,
+        "width": 160.0,
+        "height": 160.0,
+        "startX": 0.0,
+        "startY": 0.0,
+        "endX": 0.0,
+        "endY": 0.0,
+        "rotation": 0.0,
+        "cornerRadius": 24.0,
+        "fill": { "enabled": true, "r": 64, "g": 128, "b": 255, "a": 255 },
+        "stroke": {
+          "enabled": true, "r": 255, "g": 255, "b": 255, "a": 255,
+          "width": 4.0, "style": "solid"
+        },
+        "arrow": {
+          "start": false, "end": false, "length": 16.0, "width": 16.0
+        },
+        "points": []
+      }
     }
   ]
 }
@@ -309,15 +381,17 @@ auto reopened = glyma::core::ProjectReader::load("example.glyma");
 `layers` array is bottom-to-top. Layer IDs are stable across save/load. Pixel
 data files contain `width * height * 4` bytes in RGBA order. `type` defaults to
 `"raster"` when omitted; text layers additionally carry a `text` object and
-store their rendered cache in the pixel data file.
+shape layers a `shape` object, and both store their rendered cache in the pixel
+data file.
 
 ### Versioning policy
 
 The manifest carries an explicit `format` identifier and integer `version`.
 Version 1 stores raster layers only and is migrated transparently on load by
-treating every layer as raster. Version 2 adds text layers. Future versions must
-either stay backward compatible or provide explicit migrations; unsupported
-versions are rejected rather than guessed.
+treating every layer as raster. Version 2 adds text layers; version 3 adds
+vector shape layers. Future versions must either stay backward compatible or
+provide explicit migrations; unsupported versions are rejected rather than
+guessed.
 
 ### Security limits
 
@@ -349,4 +423,7 @@ Undo/redo history is session-only and is not serialized.
 - No color profile/ICC or wide-gamut management.
 - Text layers use a single style per layer (no per-character rich text),
   text-on-path, or vertical writing.
+- Shape layers support solid fills and basic dashed/dotted strokes; there are no
+  gradients, patterns, boolean path operations, bezier/pen editing, or shape
+  alignment/distribution tools.
 - No autosave, recovery snapshots, or encryption yet.

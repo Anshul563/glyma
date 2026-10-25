@@ -102,7 +102,7 @@ void ProjectWriter::save(const Document& document, const std::string& path) {
 
     nlohmann::json manifest;
     manifest["format"] = "glyma";
-    manifest["version"] = 2;
+    manifest["version"] = 3;
     manifest["name"] = std::string(document.name());
     manifest["width"] = document.width();
     manifest["height"] = document.height();
@@ -158,6 +158,55 @@ void ProjectWriter::save(const Document& document, const std::string& path) {
             tj["boxWidth"] = text.boxWidth;
             tj["boxHeight"] = text.boxHeight;
             lj["text"] = std::move(tj);
+        } else if (layer.isVector()) {
+            const ShapeLayerData& shape = layer.shape();
+            lj["type"] = "vector";
+            nlohmann::json sj;
+            sj["shapeType"] = shapeTypeName(shape.type);
+            sj["x"] = shape.x;
+            sj["y"] = shape.y;
+            sj["width"] = shape.width;
+            sj["height"] = shape.height;
+            sj["startX"] = shape.startX;
+            sj["startY"] = shape.startY;
+            sj["endX"] = shape.endX;
+            sj["endY"] = shape.endY;
+            sj["rotation"] = shape.rotation;
+            sj["cornerRadius"] = shape.cornerRadius;
+            sj["fill"] = {
+                {"enabled", shape.fill.enabled},
+                {"color",
+                 {
+                     {"r", shape.fill.color.r},
+                     {"g", shape.fill.color.g},
+                     {"b", shape.fill.color.b},
+                     {"a", shape.fill.color.a},
+                 }},
+            };
+            sj["stroke"] = {
+                {"enabled", shape.stroke.enabled},
+                {"color",
+                 {
+                     {"r", shape.stroke.color.r},
+                     {"g", shape.stroke.color.g},
+                     {"b", shape.stroke.color.b},
+                     {"a", shape.stroke.color.a},
+                 }},
+                {"width", shape.stroke.width},
+                {"style", strokeStyleName(shape.stroke.style)},
+            };
+            sj["arrow"] = {
+                {"start", shape.arrow.start},
+                {"end", shape.arrow.end},
+                {"length", shape.arrow.length},
+                {"width", shape.arrow.width},
+            };
+            nlohmann::json pointsArr = nlohmann::json::array();
+            for (const ShapePoint& point : shape.points) {
+                pointsArr.push_back({{"x", point.x}, {"y", point.y}});
+            }
+            sj["points"] = std::move(pointsArr);
+            lj["shape"] = std::move(sj);
         } else {
             lj["type"] = "raster";
         }

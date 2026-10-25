@@ -16,6 +16,8 @@
 #include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
 #include "glyma/core/selection.hpp"
+#include "glyma/core/shape_commands.hpp"
+#include "glyma/core/shape_layer.hpp"
 #include "glyma/core/text_commands.hpp"
 #include "glyma/core/text_layer.hpp"
 #include "glyma/core/transform.hpp"
@@ -155,6 +157,22 @@ public:
     bool rasterizeTextLayer(core::LayerId id);
     [[nodiscard]] const core::TextLayerData* textData(core::LayerId id) const
         noexcept;
+
+    // Vector shape layer API. Adding, editing, and rasterizing each record
+    // exactly one undoable command. Vector layer buffers hold a regenerable
+    // render cache that is refreshed automatically after every document change.
+    bool addShapeLayer(const core::ShapeLayerData& data);
+    bool setShapeData(core::LayerId id, const core::ShapeLayerData& data);
+    bool rasterizeShapeLayer(core::LayerId id);
+    [[nodiscard]] const core::ShapeLayerData* shapeData(core::LayerId id) const
+        noexcept;
+    // Hit test the topmost vector layer at a document position. Returns
+    // core::Layer::invalidId when no vector layer is hit.
+    [[nodiscard]] core::LayerId shapeLayerAt(
+        double documentX,
+        double documentY,
+        double tolerance
+    ) const noexcept;
     void renameLayer(core::LayerId id, const QString& name);
     void moveLayerUp(core::LayerId id);
     void moveLayerDown(core::LayerId id);
@@ -180,6 +198,7 @@ private:
     void ensureSelection();
     void emitDocumentState(bool selectionMayHaveChanged);
     void refreshTextCaches();
+    void refreshShapeCaches();
     void refreshModifiedState();
     bool commitTransform(core::CommandPtr command);
     void discardAdjustment();

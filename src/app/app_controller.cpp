@@ -9,6 +9,7 @@
 
 #include <QFileInfo>
 
+#include "glyma/app/shape_renderer.hpp"
 #include "glyma/app/text_renderer.hpp"
 #include "glyma/core/commands.hpp"
 #include "glyma/core/pixel_edit.hpp"
@@ -96,9 +97,9 @@ bool AppController::beginBrushStroke(double documentX, double documentY) {
     }
 
     core::Layer* layer = document_->findLayer(selectedLayerId_);
-    // Text layers render from their payload; painting their cache would be
-    // discarded on the next refresh, so pixel tools skip them.
-    if (layer == nullptr || !layer->visible() || layer->isText()) {
+    // Text and vector layers render from their payload; painting their cache
+    // would be discarded on the next refresh, so pixel tools skip them.
+    if (layer == nullptr || !layer->visible() || !layer->isRaster()) {
         return false;
     }
 
@@ -307,7 +308,7 @@ bool AppController::bucketFill(double documentX, double documentY) {
     }
 
     core::Layer* layer = document_->findLayer(selectedLayerId_);
-    if (layer == nullptr || !layer->visible() || layer->isText()) {
+    if (layer == nullptr || !layer->visible() || !layer->isRaster()) {
         return false;
     }
 
@@ -356,7 +357,7 @@ bool AppController::beginAdjustment() {
     }
 
     core::Layer* layer = document_->findLayer(selectedLayerId_);
-    if (layer == nullptr || !layer->visible() || layer->isText()) {
+    if (layer == nullptr || !layer->visible() || !layer->isRaster()) {
         return false;
     }
 
@@ -491,8 +492,13 @@ void AppController::refreshTextCaches() {
     TextRenderer::refreshDocument(*document_);
 }
 
+void AppController::refreshShapeCaches() {
+    ShapeRenderer::refreshDocument(*document_);
+}
+
 void AppController::emitDocumentState(bool selectionMayHaveChanged) {
     refreshTextCaches();
+    refreshShapeCaches();
     emit documentChanged();
     emit layersChanged();
     if (selectionMayHaveChanged) {
@@ -967,6 +973,87 @@ const core::TextLayerData* AppController::textData(core::LayerId id) const noexc
         return nullptr;
     }
     return &layer->text();
+}
+
+bool AppController::addShapeLayer(const core::ShapeLayerData& data) {
+    if (!data.isValid()) {
+        emit errorOccurred(tr("Shape properties are outside the supported range."));
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    cancelSelection();
+    auto command = std::make_unique<core::AddShapeLayerCommand>(
+        nextLayerName(), data
+    );
+    if (!history_.execute(std::move(command), *document_)) {
+        return false;
+    }
+    selectedLayerId_ = topLayerId(*document_);
+    emitDocumentState(true);
+    return true;
+}
+
+bool AppController::setShapeData(core::LayerId id, const core::ShapeLayerData& data) {
+    if (!data.isValid()) {
+        emit errorOccurred(tr("Shape properties are outside the supported range."));
+        return false;
+    }
+    core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isVector()) {
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    auto command = std::make_unique<core::SetShapeDataCommand>(id, data);
+    if (!history_.execute(std::move(command), *document_)) {
+        return false;
+    }
+    emitDocumentState(false);
+    return true;
+}
+
+bool AppController::rasterizeShapeLayer(core::LayerId id) {
+    core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isVector()) {
+        return false;
+    }
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    auto command = std::make_unique<core::RasterizeShapeLayerCommand>(id);
+    if (!history_.execute(std::move(command), *document_)) {
+        return false;
+    }
+    emitDocumentState(false);
+    return true;
+}
+
+const core::ShapeLayerData* AppController::shapeData(core::LayerId id) const noexcept {
+    const core::Layer* layer = document_->findLayer(id);
+    if (layer == nullptr || !layer->isVector()) {
+        return nullptr;
+    }
+    return &layer->shape();
+}
+
+core::LayerId AppController::shapeLayerAt(
+    double documentX,
+    double documentY,
+    double tolerance
+) const noexcept {
+    const auto& layers = document_->layerStack().layers();
+    for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
+        if (!it->isVector() || !it->visible()) {
+            continue;
+        }
+        if (core::shapeHitTest(it->shape(), documentX, documentY, tolerance)) {
+            return it->id();
+        }
+    }
+    return core::Layer::invalidId;
 }
 
 void AppController::removeLayer(core::LayerId id) {

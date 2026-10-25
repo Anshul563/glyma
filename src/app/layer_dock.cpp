@@ -11,6 +11,8 @@
 #include <QListWidgetItem>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointF>
+#include <QPolygonF>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStyle>
@@ -52,6 +54,28 @@ QIcon textLayerIcon() {
         painter.setFont(font);
         painter.setPen(QColor(70, 70, 70));
         painter.drawText(pixmap.rect(), Qt::AlignCenter, QStringLiteral("T"));
+        painter.end();
+        return QIcon(pixmap);
+    }();
+    return icon;
+}
+
+// Small diamond badge marking vector shape layers in the stack list.
+QIcon shapeLayerIcon() {
+    static const QIcon icon = [] {
+        QPixmap pixmap(16, 16);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QColor(70, 70, 70));
+        painter.setBrush(QColor(120, 170, 240));
+        const QPolygonF diamond{
+            QPointF(8.0, 2.0),
+            QPointF(14.0, 8.0),
+            QPointF(8.0, 14.0),
+            QPointF(2.0, 8.0),
+        };
+        painter.drawPolygon(diamond);
         painter.end();
         return QIcon(pixmap);
     }();
@@ -185,6 +209,9 @@ void LayerDock::refresh(const core::LayerStack& stack, core::LayerId selectedId)
         if (it->isText()) {
             item->setIcon(textLayerIcon());
             item->setToolTip(tr("Text layer"));
+        } else if (it->isVector()) {
+            item->setIcon(shapeLayerIcon());
+            item->setToolTip(tr("Vector shape layer"));
         }
         if (it->id() == selectedId) {
             selectedItem = item;

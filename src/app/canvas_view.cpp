@@ -19,6 +19,8 @@
 #include <QTransform>
 #include <QWheelEvent>
 
+#include "glyma/app/shape_renderer.hpp"
+
 namespace glyma::app {
 
 class CheckerboardItem : public QGraphicsItem {
@@ -229,6 +231,63 @@ private:
     QRectF cropRect_;
 };
 
+// Live preview of the shape currently being drawn. Draws the shape exactly as
+// the renderer will, plus a dashed outline so the pending geometry is visible.
+class ShapePreviewItem : public QGraphicsItem {
+public:
+    ShapePreviewItem() {
+        setZValue(3.0);
+        setAcceptedMouseButtons(Qt::NoButton);
+    }
+
+    void setShape(const std::optional<core::ShapeLayerData>& shape) {
+        prepareGeometryChange();
+        shape_ = shape;
+        update();
+    }
+
+    [[nodiscard]] QRectF boundingRect() const override {
+        if (!shape_.has_value()) {
+            return QRectF();
+        }
+        const core::ShapeBounds bounds = core::shapeVisualBounds(*shape_);
+        return QRectF(bounds.x, bounds.y, bounds.width, bounds.height)
+            .adjusted(-3.0, -3.0, 3.0, 3.0);
+    }
+
+    void paint(
+        QPainter* painter,
+        const QStyleOptionGraphicsItem*,
+        QWidget*
+    ) override {
+        if (!shape_.has_value()) {
+            return;
+        }
+        const core::ShapeLayerData& shape = *shape_;
+        painter->save();
+        const core::ShapePoint centre = core::shapeCentre(shape);
+        if (shape.rotation != 0.0) {
+            painter->translate(centre.x, centre.y);
+            painter->rotate(shape.rotation);
+            painter->translate(-centre.x, -centre.y);
+        }
+        ShapeRenderer::paintShape(*painter, shape);
+        painter->restore();
+
+        const core::ShapeBounds bounds = core::shapeVisualBounds(shape);
+        QPen pen(QColor(0, 200, 255), 1.0, Qt::DashLine);
+        pen.setCosmetic(true);
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRect(
+            QRectF(bounds.x, bounds.y, bounds.width, bounds.height)
+        );
+    }
+
+private:
+    std::optional<core::ShapeLayerData> shape_;
+};
+
 CanvasView::CanvasView(QWidget* parent)
     : QGraphicsView(parent) {
     setObjectName(QStringLiteral("canvasView"));
@@ -263,8 +322,44 @@ CanvasView::CanvasView(QWidget* parent)
     cropItem_->hide();
     scene_->addItem(cropItem_);
 
+    shapePreviewItem_ = new ShapePreviewItem();
+    shapePreviewItem_->hide();
+    scene_->addItem(shapePreviewItem_);
+
     checkerboard_->hide();
     pixmapItem_->hide();
+}
+
+bool CanvasView::isShapeTool(Tool tool) noexcept {
+    switch (tool) {
+    case Tool::ShapeRectangle:
+    case Tool::ShapeRoundedRectangle:
+    case Tool::ShapeEllipse:
+    case Tool::ShapeLine:
+    case Tool::ShapeArrow:
+    case Tool::ShapePolygon:
+        return true;
+    default:
+        return false;
+    }
+}
+
+core::ShapeType CanvasView::shapeTypeForTool(Tool tool) noexcept {
+    switch (tool) {
+    case Tool::ShapeRoundedRectangle:
+        return core::ShapeType::RoundedRectangle;
+    case Tool::ShapeEllipse:
+        return core::ShapeType::Ellipse;
+    case Tool::ShapeLine:
+        return core::ShapeType::Line;
+    case Tool::ShapeArrow:
+        return core::ShapeType::Arrow;
+    case Tool::ShapePolygon:
+        return core::ShapeType::Polygon;
+    case Tool::ShapeRectangle:
+    default:
+        return core::ShapeType::Rectangle;
+    }
 }
 
 void CanvasView::setImage(const QImage& image) {
@@ -327,6 +422,9 @@ void CanvasView::setActiveTool(Tool tool) {
         selecting_ = false;
         emit selectionDragCancelled();
     }
+    if (shapeDragging_ || !polygonPoints_.empty() || pendingShape_.has_value()) {
+        cancelShapeCreation();
+    }
     drawing_ = false;
     panning_ = false;
     cropDragging_ = false;
@@ -334,6 +432,10 @@ void CanvasView::setActiveTool(Tool tool) {
     setCursor(tool == Tool::Text ? Qt::IBeamCursor : Qt::CrossCursor);
     selectionItem_->hide();
     updateCropItem();
+}
+
+void CanvasView::setShapeTemplate(const core::ShapeLayerData& shape) {
+    shapeTemplate_ = shape;
 }
 
 void CanvasView::setSelection(const core::Selection& selection) {
@@ -440,6 +542,60 @@ void CanvasView::updateCropItem() {
                static_cast<double>(imageSize_.height()))
     );
     cropItem_->setVisible(hasCrop_ && activeTool_ == Tool::Crop);
+}
+
+core::ShapeLayerData CanvasView::buildShapeFromDrag(
+    const QPointF& start,
+    const QPointF& end
+) const {
+    core::ShapeLayerData shape = shapeTemplate_;
+    shape.type = shapeTypeForTool(activeTool_);
+    if (core::isLineShape(shape.type)) {
+        core::setLineGeometry(shape, start.x(), start.y(), end.x(), end.y());
+    } else if (shape.type != core::ShapeType::Polygon) {
+        core::setRectGeometry(
+            shape,
+            start.x(),
+            start.y(),
+            end.x() - start.x(),
+            end.y() - start.y()
+        );
+    }
+    return shape;
+}
+
+void CanvasView::updateShapePreview() {
+    if (pendingShape_.has_value()) {
+        shapePreviewItem_->setShape(pendingShape_);
+        shapePreviewItem_->show();
+    } else {
+        shapePreviewItem_->setShape(std::nullopt);
+        shapePreviewItem_->hide();
+    }
+}
+
+void CanvasView::cancelShapeCreation() {
+    shapeDragging_ = false;
+    pendingShape_.reset();
+    polygonPoints_.clear();
+    updateShapePreview();
+}
+
+void CanvasView::finishPolygon() {
+    if (activeTool_ != Tool::ShapePolygon || polygonPoints_.size() < 3) {
+        cancelShapeCreation();
+        return;
+    }
+    core::ShapeLayerData shape = shapeTemplate_;
+    shape.type = core::ShapeType::Polygon;
+    std::vector<core::ShapePoint> points;
+    points.reserve(polygonPoints_.size());
+    for (const QPointF& point : polygonPoints_) {
+        points.push_back(core::ShapePoint{point.x(), point.y()});
+    }
+    core::setPolygonGeometry(shape, std::move(points));
+    cancelShapeCreation();
+    emit shapeCreationRequested(shape);
 }
 
 double CanvasView::clampZoom(double zoom) noexcept {
@@ -560,6 +716,30 @@ void CanvasView::mousePressEvent(QMouseEvent* event) {
         case Tool::Text:
             emit textPlacementRequested(documentPos);
             break;
+        case Tool::ShapeRectangle:
+        case Tool::ShapeRoundedRectangle:
+        case Tool::ShapeEllipse:
+        case Tool::ShapeLine:
+        case Tool::ShapeArrow:
+            shapeDragging_ = true;
+            shapeStart_ = documentPos;
+            pendingShape_ = buildShapeFromDrag(documentPos, documentPos);
+            updateShapePreview();
+            break;
+        case Tool::ShapePolygon: {
+            polygonPoints_.push_back(documentPos);
+            core::ShapeLayerData shape = shapeTemplate_;
+            shape.type = core::ShapeType::Polygon;
+            core::setPolygonGeometry(
+                shape,
+                std::vector<core::ShapePoint>{
+                    core::ShapePoint{documentPos.x(), documentPos.y()}
+                }
+            );
+            pendingShape_ = shape;
+            updateShapePreview();
+            break;
+        }
         case Tool::Crop: {
             cropStartPoint_ = documentPos;
             cropStartRect_ = hasCrop_ ? cropRect() : QRectF();
@@ -697,6 +877,32 @@ void CanvasView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
+    if (shapeDragging_) {
+        pendingShape_ = buildShapeFromDrag(
+            shapeStart_, documentPosition(event->position())
+        );
+        updateShapePreview();
+        event->accept();
+        return;
+    }
+
+    if (activeTool_ == Tool::ShapePolygon && !polygonPoints_.empty()) {
+        pendingShape_ = buildShapeFromDrag(
+            polygonPoints_.front(), documentPosition(event->position())
+        );
+        std::vector<core::ShapePoint> points;
+        points.reserve(polygonPoints_.size() + 1);
+        for (const QPointF& point : polygonPoints_) {
+            points.push_back(core::ShapePoint{point.x(), point.y()});
+        }
+        const QPointF cursor = documentPosition(event->position());
+        points.push_back(core::ShapePoint{cursor.x(), cursor.y()});
+        core::setPolygonGeometry(*pendingShape_, std::move(points));
+        updateShapePreview();
+        event->accept();
+        return;
+    }
+
     if (selecting_) {
         emit selectionDragMoved(documentPosition(event->position()));
         event->accept();
@@ -723,6 +929,18 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* event) {
         } else {
             emit cropRectChanged(rect);
         }
+        event->accept();
+        return;
+    }
+
+    if (event->button() == Qt::LeftButton && shapeDragging_) {
+        shapeDragging_ = false;
+        const core::ShapeLayerData shape = buildShapeFromDrag(
+            shapeStart_, documentPosition(event->position())
+        );
+        pendingShape_.reset();
+        updateShapePreview();
+        emit shapeCreationRequested(shape);
         event->accept();
         return;
     }
@@ -762,7 +980,20 @@ void CanvasView::keyPressEvent(QKeyEvent* event) {
             return;
         }
     }
+    if (activeTool_ == Tool::ShapePolygon &&
+        (event->key() == Qt::Key_Return ||
+         event->key() == Qt::Key_Enter)) {
+        finishPolygon();
+        event->accept();
+        return;
+    }
     if (event->key() == Qt::Key_Escape) {
+        if (shapeDragging_ || !polygonPoints_.empty() ||
+            pendingShape_.has_value()) {
+            cancelShapeCreation();
+            event->accept();
+            return;
+        }
         if (activeTool_ == Tool::Crop && hasCrop_) {
             clearCrop();
             emit cropRectChanged(QRectF());

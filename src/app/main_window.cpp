@@ -40,8 +40,10 @@
 #include "glyma/app/canvas_view.hpp"
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/qt_image.hpp"
+#include "glyma/app/shape_properties_panel.hpp"
 #include "glyma/app/text_renderer.hpp"
 #include "glyma/app/typography_panel.hpp"
+#include "glyma/core/shape_layer.hpp"
 #include "glyma/core/text_layer.hpp"
 #include "glyma/core/transform.hpp"
 
@@ -84,6 +86,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     refreshCanvas();
     refreshLayers();
+    refreshTypography();
+    refreshShape();
     refreshStatus();
     updateActions();
     updateTitle();
@@ -427,17 +431,83 @@ void MainWindow::createToolOptions() {
         style()->standardIcon(QStyle::SP_FileDialogInfoView)
     );
 
+    shapeRectangleAction_ = makeAction(
+        this, tr("&Rectangle"), QKeySequence(QStringLiteral("U")),
+        QStringLiteral("actionToolShapeRectangle")
+    );
+    shapeRectangleAction_->setCheckable(true);
+    shapeRectangleAction_->setIcon(
+        style()->standardIcon(QStyle::SP_DesktopIcon)
+    );
+
+    shapeRoundedRectangleAction_ = makeAction(
+        this, tr("Rounded &Rectangle"), QKeySequence(),
+        QStringLiteral("actionToolShapeRoundedRectangle")
+    );
+    shapeRoundedRectangleAction_->setCheckable(true);
+    shapeRoundedRectangleAction_->setIcon(
+        style()->standardIcon(QStyle::SP_DialogYesButton)
+    );
+
+    shapeEllipseAction_ = makeAction(
+        this, tr("&Ellipse"), QKeySequence(),
+        QStringLiteral("actionToolShapeEllipse")
+    );
+    shapeEllipseAction_->setCheckable(true);
+    shapeEllipseAction_->setIcon(
+        style()->standardIcon(QStyle::SP_DialogNoButton)
+    );
+
+    shapeLineAction_ = makeAction(
+        this, tr("&Line"), QKeySequence(),
+        QStringLiteral("actionToolShapeLine")
+    );
+    shapeLineAction_->setCheckable(true);
+    shapeLineAction_->setIcon(
+        style()->standardIcon(QStyle::SP_ArrowRight)
+    );
+
+    shapeArrowAction_ = makeAction(
+        this, tr("&Arrow"), QKeySequence(),
+        QStringLiteral("actionToolShapeArrow")
+    );
+    shapeArrowAction_->setCheckable(true);
+    shapeArrowAction_->setIcon(
+        style()->standardIcon(QStyle::SP_ArrowForward)
+    );
+
+    shapePolygonAction_ = makeAction(
+        this, tr("&Polygon"), QKeySequence(),
+        QStringLiteral("actionToolShapePolygon")
+    );
+    shapePolygonAction_->setCheckable(true);
+    shapePolygonAction_->setIcon(
+        style()->standardIcon(QStyle::SP_DialogHelpButton)
+    );
+
     cropAction_->setCheckable(true);
 
     toolGroup_->addAction(rectangleSelectAction_);
     toolGroup_->addAction(ellipseSelectAction_);
     toolGroup_->addAction(bucketFillAction_);
     toolGroup_->addAction(textToolAction_);
+    toolGroup_->addAction(shapeRectangleAction_);
+    toolGroup_->addAction(shapeRoundedRectangleAction_);
+    toolGroup_->addAction(shapeEllipseAction_);
+    toolGroup_->addAction(shapeLineAction_);
+    toolGroup_->addAction(shapeArrowAction_);
+    toolGroup_->addAction(shapePolygonAction_);
     toolGroup_->addAction(cropAction_);
     toolBar->addAction(rectangleSelectAction_);
     toolBar->addAction(ellipseSelectAction_);
     toolBar->addAction(bucketFillAction_);
     toolBar->addAction(textToolAction_);
+    toolBar->addAction(shapeRectangleAction_);
+    toolBar->addAction(shapeRoundedRectangleAction_);
+    toolBar->addAction(shapeEllipseAction_);
+    toolBar->addAction(shapeLineAction_);
+    toolBar->addAction(shapeArrowAction_);
+    toolBar->addAction(shapePolygonAction_);
     toolBar->addAction(cropAction_);
     toolBar->addAction(cropApplyAction_);
     toolBar->addAction(cropCancelAction_);
@@ -556,6 +626,36 @@ void MainWindow::createToolOptions() {
             canvas_->setActiveTool(CanvasView::Tool::Text);
         }
     });
+    connect(shapeRectangleAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::ShapeRectangle);
+        }
+    });
+    connect(shapeRoundedRectangleAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::ShapeRoundedRectangle);
+        }
+    });
+    connect(shapeEllipseAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::ShapeEllipse);
+        }
+    });
+    connect(shapeLineAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::ShapeLine);
+        }
+    });
+    connect(shapeArrowAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::ShapeArrow);
+        }
+    });
+    connect(shapePolygonAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::ShapePolygon);
+        }
+    });
     connect(clearSelectionAction_, &QAction::triggered, this, [this] {
         controller_.clearSelection();
     });
@@ -607,7 +707,18 @@ void MainWindow::createDocks() {
     typographyDock->setWidget(typographyPanel_);
     addDockWidget(Qt::RightDockWidgetArea, typographyDock);
 
-    resizeDocks({dock, typographyDock}, {280, 280}, Qt::Horizontal);
+    auto* shapeDock = new QDockWidget(tr("Shape"), this);
+    shapeDock->setObjectName(QStringLiteral("shapeDock"));
+    shapeDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    shapeDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable
+    );
+    shapePropertiesPanel_ = new ShapePropertiesPanel(shapeDock);
+    shapePropertiesPanel_->setMinimumWidth(220);
+    shapeDock->setWidget(shapePropertiesPanel_);
+    addDockWidget(Qt::RightDockWidgetArea, shapeDock);
+
+    resizeDocks({dock, typographyDock, shapeDock}, {280, 280, 280}, Qt::Horizontal);
 }
 
 void MainWindow::connectSignals() {
@@ -653,6 +764,12 @@ void MainWindow::connectSignals() {
             typographyPanel_->setFocus(Qt::OtherFocusReason);
         }
     });
+    connect(canvas_, &CanvasView::shapeCreationRequested, this, [this](const core::ShapeLayerData& shape) {
+        if (controller_.addShapeLayer(shape)) {
+            refreshShape();
+            shapePropertiesPanel_->setFocus(Qt::OtherFocusReason);
+        }
+    });
     connect(canvas_, &CanvasView::cropRectChanged, this, [this](const QRectF&) {
         updateActions();
     });
@@ -675,6 +792,7 @@ void MainWindow::connectSignals() {
     connect(&controller_, &AppController::layersChanged, this, [this] {
         refreshLayers();
         refreshTypography();
+        refreshShape();
         refreshStatus();
         updateActions();
     });
@@ -685,6 +803,7 @@ void MainWindow::connectSignals() {
         [this](quint64 layerId) {
             layerDock_->setSelectedLayer(static_cast<core::LayerId>(layerId));
             refreshTypography();
+            refreshShape();
         }
     );
     connect(&controller_, &AppController::historyChanged, this, [this] {
@@ -759,6 +878,19 @@ void MainWindow::connectSignals() {
     );
     connect(typographyPanel_, &TypographyPanel::rasterizeRequested, this, [this] {
         controller_.rasterizeTextLayer(controller_.selectedLayerId());
+    });
+
+    connect(
+        shapePropertiesPanel_,
+        &ShapePropertiesPanel::shapeEdited,
+        this,
+        [this](const core::ShapeLayerData& data) {
+            canvas_->setShapeTemplate(data);
+            controller_.setShapeData(controller_.selectedLayerId(), data);
+        }
+    );
+    connect(shapePropertiesPanel_, &ShapePropertiesPanel::rasterizeRequested, this, [this] {
+        controller_.rasterizeShapeLayer(controller_.selectedLayerId());
     });
 }
 
@@ -929,6 +1061,16 @@ void MainWindow::refreshTypography() {
     typographyPanel_->setTextData(
         controller_.textData(controller_.selectedLayerId())
     );
+}
+
+void MainWindow::refreshShape() {
+    if (shapePropertiesPanel_ == nullptr || canvas_ == nullptr) {
+        return;
+    }
+    shapePropertiesPanel_->setShapeData(
+        controller_.shapeData(controller_.selectedLayerId())
+    );
+    canvas_->setShapeTemplate(shapePropertiesPanel_->shapeData());
 }
 
 void MainWindow::refreshStatus() {

@@ -68,6 +68,20 @@ Layer::Layer(LayerId id, std::string name, TextLayerData text)
     }
 }
 
+Layer::Layer(std::string name, ShapeLayerData shape)
+    : Layer(generateId(), std::move(name), std::move(shape)) {}
+
+Layer::Layer(LayerId id, std::string name, ShapeLayerData shape)
+    : id_(id),
+      name_(std::move(name)),
+      buffer_(1, 1) {
+    validateName(name_);
+    validateOpacity(opacity_);
+    shape.validate();
+    type_ = LayerType::Vector;
+    shape_ = std::move(shape);
+}
+
 LayerId Layer::id() const noexcept {
     return id_;
 }
@@ -109,6 +123,10 @@ bool Layer::isText() const noexcept {
     return type_ == LayerType::Text;
 }
 
+bool Layer::isVector() const noexcept {
+    return type_ == LayerType::Vector;
+}
+
 const TextLayerData& Layer::text() const {
     if (!text_.has_value()) {
         throw std::logic_error("Layer is not a text layer.");
@@ -127,14 +145,37 @@ void Layer::setTextData(TextLayerData data) {
     data.validate();
     type_ = LayerType::Text;
     text_ = std::move(data);
+    shape_.reset();
+}
+
+const ShapeLayerData& Layer::shape() const {
+    if (!shape_.has_value()) {
+        throw std::logic_error("Layer is not a vector layer.");
+    }
+    return *shape_;
+}
+
+ShapeLayerData& Layer::shape() {
+    if (!shape_.has_value()) {
+        throw std::logic_error("Layer is not a vector layer.");
+    }
+    return *shape_;
+}
+
+void Layer::setShapeData(ShapeLayerData data) {
+    data.validate();
+    type_ = LayerType::Vector;
+    shape_ = std::move(data);
+    text_.reset();
 }
 
 bool Layer::rasterize() noexcept {
-    if (type_ != LayerType::Text) {
+    if (type_ == LayerType::Raster) {
         return false;
     }
     type_ = LayerType::Raster;
     text_.reset();
+    shape_.reset();
     return true;
 }
 

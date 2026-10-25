@@ -1,10 +1,14 @@
 #pragma once
 
+#include <optional>
+#include <vector>
+
 #include <QGraphicsView>
 #include <QPointF>
 #include <QSize>
 
 #include "glyma/core/selection.hpp"
+#include "glyma/core/shape_layer.hpp"
 
 class QGraphicsPixmapItem;
 class QImage;
@@ -20,6 +24,7 @@ namespace glyma::app {
 class CheckerboardItem;
 class CropItem;
 class SelectionItem;
+class ShapePreviewItem;
 
 // Graphics-view based canvas with checkerboard transparency, zoom, panning,
 // and fit-to-window support. The view displays a snapshot image; it never
@@ -35,7 +40,18 @@ public:
         BucketFill,
         Crop,
         Text,
+        ShapeRectangle,
+        ShapeRoundedRectangle,
+        ShapeEllipse,
+        ShapeLine,
+        ShapeArrow,
+        ShapePolygon,
     };
+
+    // True for the vector shape tools (box/line/arrow drag or polygon clicks).
+    [[nodiscard]] static bool isShapeTool(Tool tool) noexcept;
+    // The primitive created by a shape tool.
+    [[nodiscard]] static core::ShapeType shapeTypeForTool(Tool tool) noexcept;
 
     static constexpr double minZoom = 0.05;
     static constexpr double maxZoom = 32.0;
@@ -69,6 +85,11 @@ public:
     [[nodiscard]] Tool activeTool() const noexcept;
     void setActiveTool(Tool tool);
 
+    // Style template for shapes created by the shape tools. Geometry is taken
+    // from the drag/click; fill, stroke, corner radius, and arrowheads come
+    // from this template.
+    void setShapeTemplate(const core::ShapeLayerData& shape);
+
     // Set the active pixel selection for overlay rendering. The selection is
     // stored in document coordinates (scene coordinates) and drawn separately
     // from the image pixels.
@@ -97,6 +118,10 @@ signals:
     // Emitted when the text tool is clicked at a document position; the window
     // creates a text layer there and focuses the typography controls.
     void textPlacementRequested(const QPointF& documentPosition);
+    // Emitted when a shape tool finishes creating a shape (drag release for
+    // box/line/arrow tools, or a click/Enter for the polygon tool). The window
+    // creates a vector layer from the payload.
+    void shapeCreationRequested(const core::ShapeLayerData& shape);
     // Emitted whenever the crop rectangle is created or adjusted. An empty
     // rectangle means there is no usable crop area.
     void cropRectChanged(const QRectF& documentRect);
@@ -132,12 +157,20 @@ private:
     [[nodiscard]] CropHandle cropHandleAt(const QPointF& point) const;
     [[nodiscard]] QRectF clampCropRect(const QRectF& rect) const;
     void updateCropItem();
+    [[nodiscard]] core::ShapeLayerData buildShapeFromDrag(
+        const QPointF& start,
+        const QPointF& end
+    ) const;
+    void updateShapePreview();
+    void cancelShapeCreation();
+    void finishPolygon();
 
     QGraphicsScene* scene_{nullptr};
     CheckerboardItem* checkerboard_{nullptr};
     QGraphicsPixmapItem* pixmapItem_{nullptr};
     SelectionItem* selectionItem_{nullptr};
     CropItem* cropItem_{nullptr};
+    ShapePreviewItem* shapePreviewItem_{nullptr};
     QSize imageSize_;
     double zoom_{1.0};
     bool fitMode_{false};
@@ -152,6 +185,11 @@ private:
     bool hasCrop_{false};
     QPointF selectionStart_;
     QPoint lastPanPoint_;
+    core::ShapeLayerData shapeTemplate_;
+    bool shapeDragging_{false};
+    QPointF shapeStart_;
+    std::optional<core::ShapeLayerData> pendingShape_;
+    std::vector<QPointF> polygonPoints_;
 };
 
 } // namespace glyma::app

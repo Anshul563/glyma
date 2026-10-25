@@ -5,6 +5,7 @@
 #include <string>
 
 #include "glyma/core/image_buffer.hpp"
+#include "glyma/core/shape_layer.hpp"
 #include "glyma/core/text_layer.hpp"
 
 namespace glyma::core {
@@ -13,10 +14,13 @@ using LayerId = std::uint64_t;
 
 // Discriminates the payload a layer carries. Raster layers paint pixels
 // directly; text layers keep editable text metadata and use their ImageBuffer
-// as a rendered cache maintained by the application renderer.
+// as a rendered cache maintained by the application renderer. Vector layers
+// keep editable shape geometry and likewise use their ImageBuffer as a
+// regenerable render cache.
 enum class LayerType : std::uint8_t {
     Raster,
     Text,
+    Vector,
 };
 
 // A single drawable layer in a document.
@@ -52,6 +56,12 @@ public:
     Layer(std::string name, TextLayerData text);
     Layer(LayerId id, std::string name, TextLayerData text);
 
+    // Vector-layer constructors. The buffer starts as a 1x1 transparent cache
+    // until the renderer produces the first frame. Throws std::invalid_argument
+    // for invalid shape data.
+    Layer(std::string name, ShapeLayerData shape);
+    Layer(LayerId id, std::string name, ShapeLayerData shape);
+
     Layer(const Layer&) = default;
     Layer(Layer&&) noexcept = default;
     Layer& operator=(const Layer&) = default;
@@ -73,6 +83,7 @@ public:
     [[nodiscard]] LayerType type() const noexcept;
     [[nodiscard]] bool isRaster() const noexcept;
     [[nodiscard]] bool isText() const noexcept;
+    [[nodiscard]] bool isVector() const noexcept;
 
     // Text payload accessors. The const/non-const text() accessors throw
     // std::logic_error when the layer is not a text layer.
@@ -81,8 +92,17 @@ public:
     // Promote this layer to a text layer and store `data`. Throws
     // std::invalid_argument for invalid data.
     void setTextData(TextLayerData data);
-    // Drop the text payload, converting the layer to a raster layer that keeps
-    // its current rendered pixels. Returns false when already raster.
+
+    // Vector payload accessors. The const/non-const shape() accessors throw
+    // std::logic_error when the layer is not a vector layer.
+    [[nodiscard]] const ShapeLayerData& shape() const;
+    [[nodiscard]] ShapeLayerData& shape();
+    // Promote this layer to a vector layer and store `data`. Throws
+    // std::invalid_argument for invalid data.
+    void setShapeData(ShapeLayerData data);
+
+    // Drop the editable payload, converting the layer to a raster layer that
+    // keeps its current rendered pixels. Returns false when already raster.
     bool rasterize() noexcept;
 
     [[nodiscard]] bool visible() const noexcept;
@@ -107,6 +127,7 @@ private:
     ImageBuffer buffer_;
     LayerType type_{LayerType::Raster};
     std::optional<TextLayerData> text_;
+    std::optional<ShapeLayerData> shape_;
     bool visible_{true};
     float opacity_{1.0F};
     std::int32_t x_{0};

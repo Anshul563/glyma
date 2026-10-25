@@ -27,6 +27,8 @@
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/main_window.hpp"
 #include "glyma/app/qt_image.hpp"
+#include "glyma/app/shape_properties_panel.hpp"
+#include "glyma/app/shape_renderer.hpp"
 #include "glyma/app/text_renderer.hpp"
 #include "glyma/app/typography_panel.hpp"
 #include "glyma/core/adjustments.hpp"
@@ -34,6 +36,7 @@
 #include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
 #include "glyma/core/selection.hpp"
+#include "glyma/core/shape_layer.hpp"
 #include "glyma/core/text_layer.hpp"
 #include "glyma/core/transform.hpp"
 
@@ -43,6 +46,8 @@ using glyma::app::AdjustmentDialog;
 using glyma::app::AppController;
 using glyma::app::CanvasView;
 using glyma::app::MainWindow;
+using glyma::app::ShapePropertiesPanel;
+using glyma::app::ShapeRenderer;
 using glyma::app::TextRenderer;
 using glyma::app::TypographyPanel;
 using glyma::app::toQImage;
@@ -56,6 +61,8 @@ using glyma::core::Layer;
 using glyma::core::LayerId;
 using glyma::core::Pixel;
 using glyma::core::Selection;
+using glyma::core::ShapeLayerData;
+using glyma::core::ShapeType;
 using glyma::core::TextHorizontalAlign;
 using glyma::core::TextLayerData;
 using glyma::core::TextStyle;
@@ -1108,6 +1115,134 @@ void testMainWindowTextTool() {
     assert(!controller.document().findLayer(id)->isText());
 }
 
+void testShapeRendererProducesPixels() {
+    ShapeLayerData shape;
+    shape.type = ShapeType::Rectangle;
+    glyma::core::setRectGeometry(shape, 5.0, 5.0, 20.0, 20.0);
+
+    const glyma::app::ShapeRenderResult result = ShapeRenderer::render(shape);
+    assert(result.image.width() > 1 && result.image.height() > 1);
+    assert(opaquePixelCount(result.image) > 0);
+
+    // Visual bounds include the stroke padding.
+    assert(result.bounds.width > 20.0 && result.bounds.height > 20.0);
+}
+
+void testControllerShapeIntegration() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Shapes"), 48, 48));
+    assert(controller.document().layerCount() == 1);
+
+    ShapeLayerData shape;
+    shape.type = ShapeType::Ellipse;
+    glyma::core::setRectGeometry(shape, 6.0, 6.0, 20.0, 20.0);
+    assert(controller.addShapeLayer(shape));
+    assert(controller.document().layerCount() == 2);
+
+    const LayerId id = controller.selectedLayerId();
+    const Layer* layer = controller.document().findLayer(id);
+    assert(layer != nullptr);
+    assert(layer->isVector());
+
+    const ShapeLayerData* stored = controller.shapeData(id);
+    assert(stored != nullptr);
+    assert(stored->type == ShapeType::Ellipse);
+
+    // Pixel tools skip vector layers (their cache is renderer-owned).
+    assert(!controller.beginBrushStroke(10.0, 10.0));
+    assert(!controller.bucketFill(10.0, 10.0));
+
+    // The controller refreshes the render cache, so compositing shows the fill.
+    const ImageBuffer rendered = controller.render();
+    assert(opaquePixelCount(rendered) > 0);
+
+    // Hit testing finds the shape.
+    assert(controller.shapeLayerAt(16.0, 16.0, 0.0) == id);
+    assert(controller.shapeLayerAt(100.0, 100.0, 0.0) == glyma::core::Layer::invalidId);
+
+    // Editing the payload is undoable.
+    ShapeLayerData edited = *stored;
+    edited.rotation = 45.0;
+    assert(controller.setShapeData(id, edited));
+    assert(std::abs(controller.shapeData(id)->rotation - 45.0) < 1.0e-6);
+    assert(controller.undo());
+    assert(std::abs(controller.shapeData(id)->rotation) < 1.0e-6);
+    assert(controller.redo());
+    assert(std::abs(controller.shapeData(id)->rotation - 45.0) < 1.0e-6);
+
+    // Rasterizing drops editability but keeps the rendered pixels.
+    assert(controller.rasterizeShapeLayer(id));
+    assert(controller.shapeData(id) == nullptr);
+    assert(!controller.document().findLayer(id)->isVector());
+    assert(controller.undo());
+    assert(controller.document().findLayer(id)->isVector());
+
+    // Invalid payloads are rejected without touching history.
+    ShapeLayerData invalid;
+    invalid.stroke.width = -1.0F;
+    assert(!controller.addShapeLayer(invalid));
+    assert(!controller.setShapeData(id, invalid));
+
+    // Undo the edit, then the original add.
+    assert(controller.undo());
+    assert(controller.undo());
+    assert(controller.document().layerCount() == 1);
+}
+
+void testMainWindowShapeTool() {
+    MainWindow window;
+    auto* shapeAction =
+        window.findChild<QAction*>(QStringLiteral("actionToolShapeRectangle"));
+    assert(shapeAction != nullptr);
+    assert(shapeAction->isCheckable());
+
+    auto* canvas = window.findChild<CanvasView*>(QStringLiteral("canvasView"));
+    assert(canvas != nullptr);
+
+    shapeAction->trigger();
+    QCoreApplication::processEvents();
+    assert(shapeAction->isChecked());
+    assert(canvas->activeTool() == CanvasView::Tool::ShapeRectangle);
+
+    auto* panel = window.findChild<ShapePropertiesPanel*>(
+        QStringLiteral("shapePropertiesPanel")
+    );
+    assert(panel != nullptr);
+    auto* rotation =
+        window.findChild<QDoubleSpinBox*>(QStringLiteral("shapeRotationSpin"));
+    assert(rotation != nullptr);
+
+    AppController& controller = window.controller();
+    const std::size_t before = controller.document().layerCount();
+
+    ShapeLayerData shape;
+    shape.type = ShapeType::Rectangle;
+    glyma::core::setRectGeometry(shape, 4.0, 4.0, 20.0, 16.0);
+    assert(QMetaObject::invokeMethod(
+        canvas, "shapeCreationRequested", Qt::DirectConnection,
+        Q_ARG(glyma::core::ShapeLayerData, shape)));
+    QCoreApplication::processEvents();
+    assert(controller.document().layerCount() == before + 1);
+
+    const LayerId id = controller.selectedLayerId();
+    assert(controller.shapeData(id) != nullptr);
+    assert(rotation->isEnabled());
+
+    // Editing the rotation drives the controller through the panel signal.
+    rotation->setValue(45.0);
+    QCoreApplication::processEvents();
+    assert(controller.shapeData(id) != nullptr);
+    assert(std::abs(controller.shapeData(id)->rotation - 45.0) < 1.0e-6);
+
+    // The rasterize button converts the layer.
+    auto* rasterize =
+        window.findChild<QPushButton*>(QStringLiteral("shapeRasterizeButton"));
+    assert(rasterize != nullptr);
+    rasterize->click();
+    QCoreApplication::processEvents();
+    assert(!controller.document().findLayer(id)->isVector());
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -1119,6 +1254,10 @@ int main(int argc, char* argv[]) {
 
     QApplication application(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Glyma UI Tests"));
+
+    qRegisterMetaType<glyma::core::ShapeLayerData>(
+        "glyma::core::ShapeLayerData"
+    );
 
     testBufferConversion();
     testConversionOwnsPixels();
@@ -1146,6 +1285,9 @@ int main(int argc, char* argv[]) {
     testTextRendererHorizontalPosition();
     testControllerTextIntegration();
     testMainWindowTextTool();
+    testShapeRendererProducesPixels();
+    testControllerShapeIntegration();
+    testMainWindowShapeTool();
     testControllerFailurePaths();
     testControllerFileOperations();
 

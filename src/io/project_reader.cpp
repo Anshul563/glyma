@@ -169,6 +169,93 @@ TextLayerData parseTextLayerData(const nlohmann::json& tj) {
     return data;
 }
 
+Pixel parseColor(const nlohmann::json& c, unsigned char alphaDefault) {
+    if (!c.is_object()) {
+        throw std::runtime_error("Invalid shape color");
+    }
+    return Pixel{
+        static_cast<unsigned char>(c.value("r", 0)),
+        static_cast<unsigned char>(c.value("g", 0)),
+        static_cast<unsigned char>(c.value("b", 0)),
+        static_cast<unsigned char>(c.value("a", alphaDefault))
+    };
+}
+
+ShapeLayerData parseShapeLayerData(const nlohmann::json& sj) {
+    if (!sj.is_object()) {
+        throw std::runtime_error("Invalid shape layer payload");
+    }
+
+    ShapeLayerData data;
+    if (sj.contains("shapeType") && sj["shapeType"].is_string()) {
+        ShapeType type;
+        if (!parseShapeType(sj["shapeType"].get<std::string>(), type)) {
+            throw std::runtime_error("Unknown shape type");
+        }
+        data.type = type;
+    }
+    data.x = sj.value("x", data.x);
+    data.y = sj.value("y", data.y);
+    data.width = sj.value("width", data.width);
+    data.height = sj.value("height", data.height);
+    data.startX = sj.value("startX", data.startX);
+    data.startY = sj.value("startY", data.startY);
+    data.endX = sj.value("endX", data.endX);
+    data.endY = sj.value("endY", data.endY);
+    data.rotation = sj.value("rotation", data.rotation);
+    data.cornerRadius = sj.value("cornerRadius", data.cornerRadius);
+
+    if (sj.contains("fill") && sj["fill"].is_object()) {
+        const auto& f = sj["fill"];
+        data.fill.enabled = f.value("enabled", data.fill.enabled);
+        if (f.contains("color")) {
+            data.fill.color = parseColor(f["color"], 255);
+        }
+    }
+    if (sj.contains("stroke") && sj["stroke"].is_object()) {
+        const auto& s = sj["stroke"];
+        data.stroke.enabled = s.value("enabled", data.stroke.enabled);
+        data.stroke.width = s.value("width", data.stroke.width);
+        if (s.contains("color")) {
+            data.stroke.color = parseColor(s["color"], 255);
+        }
+        if (s.contains("style") && s["style"].is_string()) {
+            StrokeStyle style;
+            if (parseStrokeStyle(s["style"].get<std::string>(), style)) {
+                data.stroke.style = style;
+            }
+        }
+    }
+    if (sj.contains("arrow") && sj["arrow"].is_object()) {
+        const auto& a = sj["arrow"];
+        data.arrow.start = a.value("start", data.arrow.start);
+        data.arrow.end = a.value("end", data.arrow.end);
+        data.arrow.length = a.value("length", data.arrow.length);
+        data.arrow.width = a.value("width", data.arrow.width);
+    }
+    if (sj.contains("points")) {
+        if (!sj["points"].is_array()) {
+            throw std::runtime_error("Invalid polygon points");
+        }
+        for (const auto& pj : sj["points"]) {
+            if (!pj.is_object()) {
+                throw std::runtime_error("Invalid polygon point");
+            }
+            data.points.push_back(ShapePoint{
+                pj.value("x", 0.0),
+                pj.value("y", 0.0),
+            });
+        }
+    }
+
+    try {
+        data.validate();
+    } catch (const std::exception&) {
+        throw std::runtime_error("Invalid shape layer properties");
+    }
+    return data;
+}
+
 } // namespace
 
 Document ProjectReader::load(const std::string& path) {
@@ -192,10 +279,11 @@ Document ProjectReader::load(const std::string& path) {
     if (!manifest.contains("version") || !manifest["version"].is_number_integer()) {
         throw std::runtime_error("Unsupported project format version");
     }
-    // Version 1 stores raster layers only; version 2 adds text layers. Older
-    // versions are migrated by treating every layer as raster.
+    // Version 1 stores raster layers only; version 2 adds text layers; version
+    // 3 adds vector shape layers. Older versions are migrated by treating every
+    // layer as raster.
     const int version = manifest["version"].get<int>();
-    if (version != 1 && version != 2) {
+    if (version != 1 && version != 2 && version != 3) {
         throw std::runtime_error("Unsupported project format version");
     }
     if (!manifest.contains("name") || !manifest["name"].is_string() ||
@@ -277,18 +365,26 @@ Document ProjectReader::load(const std::string& path) {
             ? lj.value("type", std::string("raster"))
             : std::string("raster");
         std::optional<TextLayerData> textData;
+        std::optional<ShapeLayerData> shapeData;
         if (layerType == "text") {
             if (!lj.contains("text")) {
                 throw std::runtime_error("Missing text layer payload");
             }
             textData = parseTextLayerData(lj["text"]);
+        } else if (layerType == "vector") {
+            if (!lj.contains("shape")) {
+                throw std::runtime_error("Missing shape layer payload");
+            }
+            shapeData = parseShapeLayerData(lj["shape"]);
         } else if (layerType != "raster") {
             throw std::runtime_error("Unknown layer type");
         }
 
         Layer layer = textData.has_value()
             ? Layer(lid, lj["name"].get<std::string>(), *textData)
-            : Layer(lid, lj["name"].get<std::string>(), lw, lh);
+            : (shapeData.has_value()
+                   ? Layer(lid, lj["name"].get<std::string>(), *shapeData)
+                   : Layer(lid, lj["name"].get<std::string>(), lw, lh));
         layer.setVisible(lj.value("visible", true));
         layer.setOpacity(opacity);
         layer.setPosition(lj.value("x", 0), lj.value("y", 0));

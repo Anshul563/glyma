@@ -71,6 +71,11 @@ bool RemoveLayerCommand::execute(Document& document) {
     } else {
         capturedText_.reset();
     }
+    if (layer->isVector()) {
+        capturedShape_ = layer->shape();
+    } else {
+        capturedShape_.reset();
+    }
     capturedVisible_ = layer->visible();
     capturedOpacity_ = layer->opacity();
     capturedX_ = layer->x();
@@ -90,8 +95,10 @@ bool RemoveLayerCommand::undo(Document& document) {
     try {
         Layer restored = capturedText_.has_value()
             ? Layer(capturedId_, capturedName_, *capturedText_)
-            : Layer(capturedId_, capturedName_,
-                    capturedBuffer_.width(), capturedBuffer_.height());
+            : (capturedShape_.has_value()
+                   ? Layer(capturedId_, capturedName_, *capturedShape_)
+                   : Layer(capturedId_, capturedName_,
+                           capturedBuffer_.width(), capturedBuffer_.height()));
         // Copy buffer contents (the rendered cache for text layers).
         restored.buffer() = capturedBuffer_;
         restored.setVisible(capturedVisible_);

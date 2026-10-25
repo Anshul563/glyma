@@ -48,6 +48,8 @@ add_library(glyma_core STATIC
     src/engine/transform.cpp
     src/engine/text_layer.cpp
     src/engine/text_commands.cpp
+    src/engine/shape_layer.cpp
+    src/engine/shape_commands.cpp
     src/io/png_reader.cpp
     src/io/png_writer.cpp
     src/io/document_io.cpp
@@ -104,6 +106,8 @@ if(GLYMA_BUILD_APP)
         include/glyma/app/layer_dock.hpp
         include/glyma/app/main_window.hpp
         include/glyma/app/qt_image.hpp
+        include/glyma/app/shape_properties_panel.hpp
+        include/glyma/app/shape_renderer.hpp
         include/glyma/app/text_renderer.hpp
         include/glyma/app/typography_panel.hpp
         src/app/adjustment_dialog.cpp
@@ -113,6 +117,8 @@ if(GLYMA_BUILD_APP)
         src/app/layer_dock.cpp
         src/app/main_window.cpp
         src/app/qt_image.cpp
+        src/app/shape_properties_panel.cpp
+        src/app/shape_renderer.cpp
         src/app/text_renderer.cpp
         src/app/typography_panel.cpp
     )
@@ -188,6 +194,10 @@ if(BUILD_TESTING)
         tests/text_layer_tests.cpp
     )
 
+    add_executable(glyma_shape_tests
+        tests/shape_layer_tests.cpp
+    )
+
     target_link_libraries(glyma_tests PRIVATE glyma_core)
     target_link_libraries(glyma_layer_tests PRIVATE glyma_core)
     target_link_libraries(glyma_document_tests PRIVATE glyma_core)
@@ -201,6 +211,7 @@ if(BUILD_TESTING)
     target_link_libraries(glyma_pixel_edit_tests PRIVATE glyma_core)
     target_link_libraries(glyma_transform_tests PRIVATE glyma_core)
     target_link_libraries(glyma_text_tests PRIVATE glyma_core)
+    target_link_libraries(glyma_shape_tests PRIVATE glyma_core)
 
     target_compile_options(glyma_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_layer_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -215,6 +226,7 @@ if(BUILD_TESTING)
     target_compile_options(glyma_pixel_edit_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_transform_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_text_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(glyma_shape_tests PRIVATE -Wall -Wextra -Wpedantic)
 
     add_test(
         NAME glyma_image_buffer_tests
@@ -284,6 +296,11 @@ if(BUILD_TESTING)
     add_test(
         NAME glyma_text_tests
         COMMAND glyma_text_tests
+    )
+
+    add_test(
+        NAME glyma_shape_tests
+        COMMAND glyma_shape_tests
     )
 
     if(GLYMA_BUILD_APP)
