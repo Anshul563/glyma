@@ -2,23 +2,18 @@
 
 #include <cmath>
 
-#include <QColor>
-#include <QFont>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
-#include <QPainter>
-#include <QPixmap>
-#include <QPointF>
-#include <QPolygonF>
 #include <QSignalBlocker>
 #include <QSpinBox>
-#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
+
+#include "glyma/app/icon_manager.hpp"
 
 namespace glyma::app {
 namespace {
@@ -37,49 +32,10 @@ QToolButton* makeToolButton(
     button->setObjectName(objectName);
     button->setToolTip(toolTip);
     button->setIcon(icon);
+    button->setIconSize(IconManager::panelIconSize());
     button->setAutoRaise(true);
     button->setFixedSize(26, 26);
     return button;
-}
-
-// Small "T" badge marking text layers in the stack list.
-QIcon textLayerIcon() {
-    static const QIcon icon = [] {
-        QPixmap pixmap(16, 16);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        QFont font = painter.font();
-        font.setBold(true);
-        font.setPixelSize(13);
-        painter.setFont(font);
-        painter.setPen(QColor(70, 70, 70));
-        painter.drawText(pixmap.rect(), Qt::AlignCenter, QStringLiteral("T"));
-        painter.end();
-        return QIcon(pixmap);
-    }();
-    return icon;
-}
-
-// Small diamond badge marking vector shape layers in the stack list.
-QIcon shapeLayerIcon() {
-    static const QIcon icon = [] {
-        QPixmap pixmap(16, 16);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setPen(QColor(70, 70, 70));
-        painter.setBrush(QColor(120, 170, 240));
-        const QPolygonF diamond{
-            QPointF(8.0, 2.0),
-            QPointF(14.0, 8.0),
-            QPointF(8.0, 14.0),
-            QPointF(2.0, 8.0),
-        };
-        painter.drawPolygon(diamond);
-        painter.end();
-        return QIcon(pixmap);
-    }();
-    return icon;
 }
 
 } // namespace
@@ -111,25 +67,25 @@ LayerDock::LayerDock(QWidget* parent)
         this,
         QStringLiteral("layerAddButton"),
         tr("Add transparent layer"),
-        style()->standardIcon(QStyle::SP_FileDialogNewFolder)
+        IconManager::icon(QStringLiteral("layer-add"))
     );
     deleteButton_ = makeToolButton(
         this,
         QStringLiteral("layerDeleteButton"),
         tr("Delete selected layer"),
-        style()->standardIcon(QStyle::SP_TrashIcon)
+        IconManager::icon(QStringLiteral("layer-delete"))
     );
     upButton_ = makeToolButton(
         this,
         QStringLiteral("layerUpButton"),
         tr("Move selected layer up"),
-        style()->standardIcon(QStyle::SP_ArrowUp)
+        IconManager::icon(QStringLiteral("layer-up"))
     );
     downButton_ = makeToolButton(
         this,
         QStringLiteral("layerDownButton"),
         tr("Move selected layer down"),
-        style()->standardIcon(QStyle::SP_ArrowDown)
+        IconManager::icon(QStringLiteral("layer-down"))
     );
 
     actionRow->addWidget(addButton_);
@@ -207,11 +163,14 @@ void LayerDock::refresh(const core::LayerStack& stack, core::LayerId selectedId)
         );
         item->setData(nameRole, QString::fromStdString(it->name()));
         if (it->isText()) {
-            item->setIcon(textLayerIcon());
+            item->setIcon(IconManager::icon(QStringLiteral("layer-text")));
             item->setToolTip(tr("Text layer"));
         } else if (it->isVector()) {
-            item->setIcon(shapeLayerIcon());
+            item->setIcon(IconManager::icon(QStringLiteral("layer-vector")));
             item->setToolTip(tr("Vector shape layer"));
+        } else {
+            item->setIcon(IconManager::icon(QStringLiteral("layer-raster")));
+            item->setToolTip(tr("Raster layer"));
         }
         if (it->id() == selectedId) {
             selectedItem = item;

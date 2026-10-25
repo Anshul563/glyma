@@ -409,6 +409,69 @@ guessed.
 
 Undo/redo history is session-only and is not serialized.
 
+## User Interface Icons
+
+The desktop UI uses a centralized, theme-aware icon system built on the
+Hugeicons free collection.
+
+- `glyma::app::IconManager` (`include/glyma/app/icon_manager.hpp`,
+  `src/app/icon_manager.cpp`) resolves icons by *semantic name* such as
+  `"brush"`, `"undo"`, or `"layer-add"`. Widgets never reference asset paths
+  directly:
+
+  ```cpp
+  brushAction->setIcon(IconManager::icon("brush"));
+  ```
+
+- The semantic name -> asset mapping is a single source of truth:
+  `resources/icon_manifest.txt`. CMake reads it at configure time, verifies that
+  every referenced asset exists, and generates a Qt resource file
+  (`build/glyma_icons.qrc`) that bundles only the listed SVGs (plus the
+  manifest). A missing asset is a hard configure error.
+- Icons are resolved lazily on first use, rasterized from SVG at the requested
+  size with a high-DPI (2x) variant, tinted to the active theme, and cached in
+  memory. The full collection (6000+ files) is never parsed or bundled.
+- Sizes are centralized in `IconManager` (`toolbarIconSize`, `menuIconSize`,
+  `panelIconSize`, `toolButtonIconSize`) so toolbar, panel, and tool-button
+  spacing stay consistent and scale correctly on high-DPI displays.
+- Unknown names return a predictable dashed placeholder (and log once) instead
+  of an empty icon.
+
+### Adding an icon
+
+1. Pick an asset from `resources/icons/`.
+2. Add one line to `resources/icon_manifest.txt`:
+   `<semantic-name> = <hugeicons-filename>`.
+3. Use `IconManager::icon("<semantic-name>")` in the widget.
+
+No other file needs to change; the resource file is regenerated from the
+manifest on the next configure.
+
+### Theme and color behavior
+
+The Hugeicons assets are monochrome (`#141B34` stroke on a 24x24 viewBox). Glyma
+does not edit them; it rasterizes each SVG and re-tints every opaque pixel to a
+theme color using `QPainter::CompositionMode_SourceIn`. The tint is light
+(`#E4E4E6`) for the dark theme and dark (`#141B34`) for a light theme, selected
+through `IconManager::setTheme` (the main window pins `Dark` because its
+stylesheet does not update the palette). Qt derives hovered, pressed, checked,
+and disabled states from the rendered pixmaps, so they remain distinguishable;
+checked tool buttons use the application accent color as their background.
+
+### SVG support
+
+Icons are rendered from SVG through Qt's SVG image-format plugin (`libqsvg`).
+At runtime Qt must be able to locate that plugin (it ships with Qt Svg); the
+`glyma_icon_tests` target fails if SVG decoding is unavailable. Assets are
+embedded in the executable via Qt resources, so packaged builds do not depend on
+the `resources/` source directory.
+
+### Third-party notices
+
+- **Hugeicons** free icon set (`@hugeicons/core-free-icons`), MIT License,
+  Copyright (c) 2025 Hugeicons — https://hugeicons.com. Only a curated subset is
+  bundled; the full license text is kept in `resources/icons/LICENSE.txt`.
+
 ## Known limitations
 
 - No JPEG/WebP/SVG/PSD support.

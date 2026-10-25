@@ -1,0 +1,78 @@
+# Glyma semantic icon manifest.
+#
+# Single source of truth for the icon system. Each line maps a semantic icon
+# name used by the application to a real SVG asset in resources/icons/.
+#
+#   <semantic-name> = <hugeicons-filename>
+#
+# Rules:
+#   * Blank lines and lines starting with '#' are ignored.
+#   * The asset filename must exist in resources/icons/ (verified at configure
+#     time; a missing file is a hard CMake error).
+#   * Names are stable identifiers: widgets never reference filenames directly.
+#   * To add an icon: pick an asset from resources/icons/, add one line here,
+#     then use IconManager::icon("<semantic-name>"). No other file changes are
+#     required; CMake regenerates the Qt resource file from this manifest.
+#
+# Style: Hugeicons "stroke-rounded" free set (@hugeicons/core-free-icons, MIT).
+# All assets use a single 24x24 viewBox with a monochrome stroke; Glyma tints
+# them at runtime to match the active theme.
+
+# --- Tools ---------------------------------------------------------------
+brush = brush.svg
+eraser = eraser-01.svg
+move = move-01.svg
+rectangle-select = cursor-rectangle-selection-01.svg
+ellipse-select = cursor-circle-selection-01.svg
+bucket-fill = paint-bucket.svg
+crop = crop.svg
+text = text-font.svg
+shape-rectangle = rectangle-horizontal.svg
+shape-rounded-rectangle = square.svg
+shape-ellipse = ellipse.svg
+shape-line = minus-sign.svg
+shape-arrow = arrow-up-right-01.svg
+shape-polygon = polygon.svg
+
+# --- View / zoom ---------------------------------------------------------
+zoom-in = zoom-in.svg
+zoom-out = zoom-out.svg
+zoom-fit = fit-to-screen.svg
+zoom-reset = refresh-01.svg
+
+# --- Selection -----------------------------------------------------------
+selection-clear = cursor-remove-selection-01.svg
+selection-invert = select-02.svg
+
+# --- File ----------------------------------------------------------------
+file-new = file-add.svg
+file-open = folder-open.svg
+file-save = save.svg
+file-save-as = save-all.svg
+file-export = file-export.svg
+file-exit = log-out.svg
+
+# --- Edit / image --------------------------------------------------------
+edit-undo = undo-02.svg
+edit-redo = redo-01.svg
+image-adjustments = sliders-horizontal.svg
+help-about = info.svg
+
+# --- Layers --------------------------------------------------------------
+layer-add = layer-add.svg
+layer-delete = delete-02.svg
+layer-up = arrow-up-01.svg
+layer-down = arrow-down-01.svg
+layer-visibility = eye.svg
+layer-visibility-off = eye-off.svg
+layer-raster = image-01.svg
+layer-text = text-font.svg
+layer-vector = shapes.svg
+
+# --- Panels / misc -------------------------------------------------------
+rasterize = image-01.svg
+settings = settings-01.svg
+color = color-picker.svg
+app = shapes.svg
+apply = checkmark-circle-01.svg
+cancel = cancel-01.svg

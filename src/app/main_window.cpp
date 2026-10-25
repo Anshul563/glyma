@@ -32,12 +32,12 @@
 #include <QSize>
 #include <QSpinBox>
 #include <QStatusBar>
-#include <QStyle>
 #include <QToolBar>
 #include <QToolButton>
 
 #include "glyma/app/adjustment_dialog.hpp"
 #include "glyma/app/canvas_view.hpp"
+#include "glyma/app/icon_manager.hpp"
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/qt_image.hpp"
 #include "glyma/app/shape_properties_panel.hpp"
@@ -83,6 +83,7 @@ MainWindow::MainWindow(QWidget* parent)
     createDocks();
     connectSignals();
     applyStyle();
+    setWindowIcon(IconManager::icon(QStringLiteral("app")));
 
     refreshCanvas();
     refreshLayers();
@@ -245,15 +246,37 @@ void MainWindow::createActions() {
         this, tr("&About Glyma"), QKeySequence(), QStringLiteral("actionHelpAbout")
     );
 
-    newAction_->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
-    openAction_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-    saveAction_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
-    undoAction_->setIcon(style()->standardIcon(QStyle::SP_ArrowBack));
-    redoAction_->setIcon(style()->standardIcon(QStyle::SP_ArrowForward));
-    exitAction_->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
-    cropAction_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
-    cropApplyAction_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
-    cropCancelAction_->setIcon(style()->standardIcon(QStyle::SP_DialogCancelButton));
+    newAction_->setIcon(IconManager::icon(QStringLiteral("file-new")));
+    openAction_->setIcon(IconManager::icon(QStringLiteral("file-open")));
+    saveAction_->setIcon(IconManager::icon(QStringLiteral("file-save")));
+    saveAsAction_->setIcon(IconManager::icon(QStringLiteral("file-save-as")));
+    exportPngAction_->setIcon(IconManager::icon(QStringLiteral("file-export")));
+    exitAction_->setIcon(IconManager::icon(QStringLiteral("file-exit")));
+    undoAction_->setIcon(IconManager::icon(QStringLiteral("edit-undo")));
+    redoAction_->setIcon(IconManager::icon(QStringLiteral("edit-redo")));
+    zoomInAction_->setIcon(IconManager::icon(QStringLiteral("zoom-in")));
+    zoomOutAction_->setIcon(IconManager::icon(QStringLiteral("zoom-out")));
+    fitAction_->setIcon(IconManager::icon(QStringLiteral("zoom-fit")));
+    resetZoomAction_->setIcon(IconManager::icon(QStringLiteral("zoom-reset")));
+    imageAdjustmentsAction_->setIcon(IconManager::icon(QStringLiteral("image-adjustments")));
+    aboutAction_->setIcon(IconManager::icon(QStringLiteral("help-about")));
+    cropAction_->setIcon(IconManager::icon(QStringLiteral("crop")));
+    cropApplyAction_->setIcon(IconManager::icon(QStringLiteral("apply")));
+    cropCancelAction_->setIcon(IconManager::icon(QStringLiteral("cancel")));
+
+    newAction_->setToolTip(tr("Create a new document"));
+    openAction_->setToolTip(tr("Open an existing project or import an image"));
+    saveAction_->setToolTip(tr("Save the current project"));
+    saveAsAction_->setToolTip(tr("Save the current project to a new file"));
+    exportPngAction_->setToolTip(tr("Export the rendered document as PNG"));
+    undoAction_->setToolTip(tr("Undo the last action"));
+    redoAction_->setToolTip(tr("Redo the last undone action"));
+    zoomInAction_->setToolTip(tr("Zoom in"));
+    zoomOutAction_->setToolTip(tr("Zoom out"));
+    fitAction_->setToolTip(tr("Fit the document to the window"));
+    resetZoomAction_->setToolTip(tr("Reset zoom to 100%"));
+    imageAdjustmentsAction_->setToolTip(tr("Adjust exposure, color, and filters"));
+    cropAction_->setToolTip(tr("Crop the canvas"));
 
     connect(newAction_, &QAction::triggered, this, [this] { onNew(); });
     connect(openAction_, &QAction::triggered, this, [this] { onOpen(); });
@@ -350,7 +373,7 @@ void MainWindow::createToolBar() {
     auto* toolBar = addToolBar(tr("Main"));
     toolBar->setObjectName(QStringLiteral("mainToolBar"));
     toolBar->setMovable(false);
-    toolBar->setIconSize(QSize(16, 16));
+    toolBar->setIconSize(IconManager::toolbarIconSize());
     toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
     toolBar->addAction(newAction_);
@@ -369,7 +392,7 @@ void MainWindow::createToolOptions() {
     auto* toolBar = addToolBar(tr("Tools"));
     toolBar->setObjectName(QStringLiteral("toolsToolBar"));
     toolBar->setMovable(false);
-    toolBar->setIconSize(QSize(16, 16));
+    toolBar->setIconSize(IconManager::toolbarIconSize());
     toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
     toolGroup_ = new QActionGroup(this);
@@ -380,14 +403,16 @@ void MainWindow::createToolOptions() {
         QStringLiteral("actionToolBrush")
     );
     brushToolAction_->setCheckable(true);
-    brushToolAction_->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));
+    brushToolAction_->setIcon(IconManager::icon(QStringLiteral("brush")));
+    brushToolAction_->setToolTip(tr("Paint with the foreground color"));
 
     eraserToolAction_ = makeAction(
         this, tr("&Eraser"), QKeySequence(QStringLiteral("E")),
         QStringLiteral("actionToolEraser")
     );
     eraserToolAction_->setCheckable(true);
-    eraserToolAction_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    eraserToolAction_->setIcon(IconManager::icon(QStringLiteral("eraser")));
+    eraserToolAction_->setToolTip(tr("Erase pixels to transparency"));
 
     toolGroup_->addAction(brushToolAction_);
     toolGroup_->addAction(eraserToolAction_);
@@ -401,8 +426,9 @@ void MainWindow::createToolOptions() {
     );
     rectangleSelectAction_->setCheckable(true);
     rectangleSelectAction_->setIcon(
-        style()->standardIcon(QStyle::SP_FileDialogContentsView)
+        IconManager::icon(QStringLiteral("rectangle-select"))
     );
+    rectangleSelectAction_->setToolTip(tr("Select a rectangular region"));
 
     ellipseSelectAction_ = makeAction(
         this, tr("&Ellipse Select"), QKeySequence(),
@@ -410,8 +436,9 @@ void MainWindow::createToolOptions() {
     );
     ellipseSelectAction_->setCheckable(true);
     ellipseSelectAction_->setIcon(
-        style()->standardIcon(QStyle::SP_FileDialogDetailedView)
+        IconManager::icon(QStringLiteral("ellipse-select"))
     );
+    ellipseSelectAction_->setToolTip(tr("Select an elliptical region"));
 
     bucketFillAction_ = makeAction(
         this, tr("&Bucket Fill"), QKeySequence(),
@@ -419,8 +446,9 @@ void MainWindow::createToolOptions() {
     );
     bucketFillAction_->setCheckable(true);
     bucketFillAction_->setIcon(
-        style()->standardIcon(QStyle::SP_DialogApplyButton)
+        IconManager::icon(QStringLiteral("bucket-fill"))
     );
+    bucketFillAction_->setToolTip(tr("Fill connected areas with the foreground color"));
 
     textToolAction_ = makeAction(
         this, tr("&Text"), QKeySequence(QStringLiteral("T")),
@@ -428,8 +456,9 @@ void MainWindow::createToolOptions() {
     );
     textToolAction_->setCheckable(true);
     textToolAction_->setIcon(
-        style()->standardIcon(QStyle::SP_FileDialogInfoView)
+        IconManager::icon(QStringLiteral("text"))
     );
+    textToolAction_->setToolTip(tr("Add editable text"));
 
     shapeRectangleAction_ = makeAction(
         this, tr("&Rectangle"), QKeySequence(QStringLiteral("U")),
@@ -437,8 +466,9 @@ void MainWindow::createToolOptions() {
     );
     shapeRectangleAction_->setCheckable(true);
     shapeRectangleAction_->setIcon(
-        style()->standardIcon(QStyle::SP_DesktopIcon)
+        IconManager::icon(QStringLiteral("shape-rectangle"))
     );
+    shapeRectangleAction_->setToolTip(tr("Draw a rectangle"));
 
     shapeRoundedRectangleAction_ = makeAction(
         this, tr("Rounded &Rectangle"), QKeySequence(),
@@ -446,8 +476,9 @@ void MainWindow::createToolOptions() {
     );
     shapeRoundedRectangleAction_->setCheckable(true);
     shapeRoundedRectangleAction_->setIcon(
-        style()->standardIcon(QStyle::SP_DialogYesButton)
+        IconManager::icon(QStringLiteral("shape-rounded-rectangle"))
     );
+    shapeRoundedRectangleAction_->setToolTip(tr("Draw a rounded rectangle"));
 
     shapeEllipseAction_ = makeAction(
         this, tr("&Ellipse"), QKeySequence(),
@@ -455,8 +486,9 @@ void MainWindow::createToolOptions() {
     );
     shapeEllipseAction_->setCheckable(true);
     shapeEllipseAction_->setIcon(
-        style()->standardIcon(QStyle::SP_DialogNoButton)
+        IconManager::icon(QStringLiteral("shape-ellipse"))
     );
+    shapeEllipseAction_->setToolTip(tr("Draw an ellipse"));
 
     shapeLineAction_ = makeAction(
         this, tr("&Line"), QKeySequence(),
@@ -464,8 +496,9 @@ void MainWindow::createToolOptions() {
     );
     shapeLineAction_->setCheckable(true);
     shapeLineAction_->setIcon(
-        style()->standardIcon(QStyle::SP_ArrowRight)
+        IconManager::icon(QStringLiteral("shape-line"))
     );
+    shapeLineAction_->setToolTip(tr("Draw a line"));
 
     shapeArrowAction_ = makeAction(
         this, tr("&Arrow"), QKeySequence(),
@@ -473,8 +506,9 @@ void MainWindow::createToolOptions() {
     );
     shapeArrowAction_->setCheckable(true);
     shapeArrowAction_->setIcon(
-        style()->standardIcon(QStyle::SP_ArrowForward)
+        IconManager::icon(QStringLiteral("shape-arrow"))
     );
+    shapeArrowAction_->setToolTip(tr("Draw an arrow"));
 
     shapePolygonAction_ = makeAction(
         this, tr("&Polygon"), QKeySequence(),
@@ -482,8 +516,9 @@ void MainWindow::createToolOptions() {
     );
     shapePolygonAction_->setCheckable(true);
     shapePolygonAction_->setIcon(
-        style()->standardIcon(QStyle::SP_DialogHelpButton)
+        IconManager::icon(QStringLiteral("shape-polygon"))
     );
+    shapePolygonAction_->setToolTip(tr("Draw a polygon"));
 
     cropAction_->setCheckable(true);
 
@@ -518,15 +553,17 @@ void MainWindow::createToolOptions() {
         QStringLiteral("actionSelectClear")
     );
     clearSelectionAction_->setIcon(
-        style()->standardIcon(QStyle::SP_DialogCancelButton)
+        IconManager::icon(QStringLiteral("selection-clear"))
     );
+    clearSelectionAction_->setToolTip(tr("Clear the current selection"));
     invertSelectionAction_ = makeAction(
         this, tr("&Invert Selection"), QKeySequence(),
         QStringLiteral("actionSelectInvert")
     );
     invertSelectionAction_->setIcon(
-        style()->standardIcon(QStyle::SP_DialogResetButton)
+        IconManager::icon(QStringLiteral("selection-invert"))
     );
+    invertSelectionAction_->setToolTip(tr("Invert the current selection"));
     toolBar->addAction(clearSelectionAction_);
     toolBar->addAction(invertSelectionAction_);
     toolBar->addSeparator();
@@ -895,6 +932,10 @@ void MainWindow::connectSignals() {
 }
 
 void MainWindow::applyStyle() {
+    // The stylesheet below hardcodes a dark surface and does not update the
+    // palette, so pin the icon theme explicitly.
+    IconManager::setTheme(IconManager::Theme::Dark);
+
     setStyleSheet(QStringLiteral(R"(
         QMainWindow, QDialog {
             background-color: #202023;

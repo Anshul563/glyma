@@ -19,11 +19,13 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QToolBar>
 #include <QToolButton>
 #include <QtGlobal>
 
 #include "glyma/app/adjustment_dialog.hpp"
 #include "glyma/app/canvas_view.hpp"
+#include "glyma/app/icon_manager.hpp"
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/main_window.hpp"
 #include "glyma/app/qt_image.hpp"
@@ -45,6 +47,7 @@ namespace {
 using glyma::app::AdjustmentDialog;
 using glyma::app::AppController;
 using glyma::app::CanvasView;
+using glyma::app::IconManager;
 using glyma::app::MainWindow;
 using glyma::app::ShapePropertiesPanel;
 using glyma::app::ShapeRenderer;
@@ -1243,6 +1246,90 @@ void testMainWindowShapeTool() {
     assert(!controller.document().findLayer(id)->isVector());
 }
 
+void testIconIntegration() {
+    MainWindow window;
+
+    const QStringList toolActions{
+        QStringLiteral("actionToolBrush"),
+        QStringLiteral("actionToolEraser"),
+        QStringLiteral("actionToolRectangleSelect"),
+        QStringLiteral("actionToolEllipseSelect"),
+        QStringLiteral("actionToolBucketFill"),
+        QStringLiteral("actionToolText"),
+        QStringLiteral("actionToolShapeRectangle"),
+        QStringLiteral("actionToolShapeRoundedRectangle"),
+        QStringLiteral("actionToolShapeEllipse"),
+        QStringLiteral("actionToolShapeLine"),
+        QStringLiteral("actionToolShapeArrow"),
+        QStringLiteral("actionToolShapePolygon"),
+        QStringLiteral("actionImageCrop"),
+        QStringLiteral("actionSelectClear"),
+        QStringLiteral("actionSelectInvert"),
+    };
+    for (const QString& name : toolActions) {
+        auto* action = window.findChild<QAction*>(name);
+        assert(action != nullptr);
+        assert(!action->icon().isNull());
+        assert(!action->toolTip().isEmpty());
+    }
+
+    const QStringList fileEditActions{
+        QStringLiteral("actionFileNew"),
+        QStringLiteral("actionFileOpen"),
+        QStringLiteral("actionFileSave"),
+        QStringLiteral("actionFileSaveAs"),
+        QStringLiteral("actionFileExportPng"),
+        QStringLiteral("actionFileExit"),
+        QStringLiteral("actionEditUndo"),
+        QStringLiteral("actionEditRedo"),
+        QStringLiteral("actionViewZoomIn"),
+        QStringLiteral("actionViewZoomOut"),
+        QStringLiteral("actionViewFit"),
+        QStringLiteral("actionViewResetZoom"),
+        QStringLiteral("actionImageAdjustments"),
+        QStringLiteral("actionHelpAbout"),
+    };
+    for (const QString& name : fileEditActions) {
+        auto* action = window.findChild<QAction*>(name);
+        assert(action != nullptr);
+        assert(!action->icon().isNull());
+    }
+
+    auto* mainToolBar = window.findChild<QToolBar*>(QStringLiteral("mainToolBar"));
+    auto* toolsToolBar = window.findChild<QToolBar*>(QStringLiteral("toolsToolBar"));
+    assert(mainToolBar != nullptr);
+    assert(toolsToolBar != nullptr);
+    assert(mainToolBar->iconSize() == IconManager::toolbarIconSize());
+    assert(toolsToolBar->iconSize() == IconManager::toolbarIconSize());
+
+    for (const QString& name : {
+             QStringLiteral("layerAddButton"),
+             QStringLiteral("layerDeleteButton"),
+             QStringLiteral("layerUpButton"),
+             QStringLiteral("layerDownButton"),
+         }) {
+        auto* button = window.findChild<QToolButton*>(name);
+        assert(button != nullptr);
+        assert(!button->icon().isNull());
+        assert(button->iconSize() == IconManager::panelIconSize());
+    }
+
+    assert(!window.windowIcon().isNull());
+
+    // Rendering the tool bar must actually paint the icon pixels.
+    const QPixmap rendered = toolsToolBar->grab();
+    const QImage image = rendered.toImage();
+    int opaque = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (qAlpha(image.pixel(x, y)) > 0) {
+                ++opaque;
+            }
+        }
+    }
+    assert(opaque > 0);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -1288,6 +1375,7 @@ int main(int argc, char* argv[]) {
     testShapeRendererProducesPixels();
     testControllerShapeIntegration();
     testMainWindowShapeTool();
+    testIconIntegration();
     testControllerFailurePaths();
     testControllerFileOperations();
 

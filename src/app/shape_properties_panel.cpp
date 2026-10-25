@@ -12,6 +12,8 @@
 #include <QVBoxLayout>
 #include <QVariant>
 
+#include "glyma/app/icon_manager.hpp"
+
 namespace glyma::app {
 namespace {
 
@@ -149,6 +151,9 @@ void ShapePropertiesPanel::buildUi() {
     layout->addLayout(form);
 
     rasterize_ = new QPushButton(tr("Rasterize shape"), this);
+    rasterize_->setIcon(IconManager::icon(QStringLiteral("rasterize")));
+    rasterize_->setIconSize(IconManager::panelIconSize());
+    rasterize_->setToolTip(tr("Bake the shape into layer pixels"));
     rasterize_->setObjectName(QStringLiteral("shapeRasterizeButton"));
     layout->addWidget(rasterize_);
     layout->addStretch(1);

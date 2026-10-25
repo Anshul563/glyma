@@ -21,6 +21,8 @@
 #include <QVBoxLayout>
 #include <QVariant>
 
+#include "glyma/app/icon_manager.hpp"
+
 namespace glyma::app {
 namespace {
 
@@ -173,6 +175,9 @@ void TypographyPanel::buildUi() {
     layout->addLayout(form);
 
     rasterize_ = new QPushButton(tr("Rasterize text"), this);
+    rasterize_->setIcon(IconManager::icon(QStringLiteral("rasterize")));
+    rasterize_->setIconSize(IconManager::panelIconSize());
+    rasterize_->setToolTip(tr("Bake the text into layer pixels"));
     rasterize_->setObjectName(QStringLiteral("textRasterizeButton"));
     layout->addWidget(rasterize_);
     layout->addStretch(1);
