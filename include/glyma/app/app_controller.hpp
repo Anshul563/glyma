@@ -16,6 +16,7 @@
 #include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
 #include "glyma/core/selection.hpp"
+#include "glyma/core/transform.hpp"
 
 namespace glyma::app {
 
@@ -92,6 +93,36 @@ public:
     // Discard the preview, restoring the layer exactly.
     void cancelAdjustment();
 
+    // Document transformation API. Each successful call records exactly one
+    // undoable command. Invalid requests return false and leave the document
+    // untouched (invalid input is also reported through errorOccurred).
+    bool crop(const core::CropRect& rect);
+    bool resizeCanvas(
+        std::uint32_t width,
+        std::uint32_t height,
+        core::Anchor anchor = core::Anchor::Center
+    );
+    bool resizeImage(std::uint32_t width, std::uint32_t height);
+    bool rotateCanvas(core::DocumentRotation rotation);
+    bool rotateCanvas(double degrees);
+    bool rotateCanvas90(bool clockwise);
+    bool rotateCanvas180();
+    bool flipCanvas(bool horizontal);
+
+    // Layer transformation API. Rotations preserve the layer centre.
+    bool transformLayer(core::LayerId id, core::LayerTransform transform);
+    bool rotateLayer(core::LayerId id, double degrees);
+    bool scaleLayer(
+        core::LayerId id,
+        std::uint32_t width,
+        std::uint32_t height
+    );
+    bool translateLayer(
+        core::LayerId id,
+        std::int32_t deltaX,
+        std::int32_t deltaY
+    );
+
     bool newDocument(
         const QString& name,
         std::uint32_t width,
@@ -134,6 +165,7 @@ private:
     void ensureSelection();
     void emitDocumentState(bool selectionMayHaveChanged);
     void refreshModifiedState();
+    bool commitTransform(core::CommandPtr command);
     void discardAdjustment();
     [[nodiscard]] std::string nextLayerName() const;
 

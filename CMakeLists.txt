@@ -45,6 +45,7 @@ add_library(glyma_core STATIC
     src/engine/fill.cpp
     src/engine/adjustments.cpp
     src/engine/pixel_edit.cpp
+    src/engine/transform.cpp
     src/io/png_reader.cpp
     src/io/png_writer.cpp
     src/io/document_io.cpp
@@ -173,6 +174,10 @@ if(BUILD_TESTING)
         tests/pixel_edit_tests.cpp
     )
 
+    add_executable(glyma_transform_tests
+        tests/transform_tests.cpp
+    )
+
     target_link_libraries(glyma_tests PRIVATE glyma_core)
     target_link_libraries(glyma_layer_tests PRIVATE glyma_core)
     target_link_libraries(glyma_document_tests PRIVATE glyma_core)
@@ -184,6 +189,7 @@ if(BUILD_TESTING)
     target_link_libraries(glyma_fill_tests PRIVATE glyma_core)
     target_link_libraries(glyma_adjustments_tests PRIVATE glyma_core)
     target_link_libraries(glyma_pixel_edit_tests PRIVATE glyma_core)
+    target_link_libraries(glyma_transform_tests PRIVATE glyma_core)
 
     target_compile_options(glyma_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_layer_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -196,6 +202,7 @@ if(BUILD_TESTING)
     target_compile_options(glyma_fill_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_adjustments_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(glyma_pixel_edit_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(glyma_transform_tests PRIVATE -Wall -Wextra -Wpedantic)
 
     add_test(
         NAME glyma_image_buffer_tests
@@ -243,6 +250,11 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME glyma_fill_tests
+        COMMAND glyma_fill_tests
+    )
+
+    add_test(
         NAME glyma_adjustments_tests
         COMMAND glyma_adjustments_tests
     )
@@ -253,8 +265,8 @@ if(BUILD_TESTING)
     )
 
     add_test(
-        NAME glyma_fill_tests
-        COMMAND glyma_fill_tests
+        NAME glyma_transform_tests
+        COMMAND glyma_transform_tests
     )
 
     if(GLYMA_BUILD_APP)

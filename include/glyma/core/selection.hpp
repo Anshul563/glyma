@@ -70,6 +70,26 @@ public:
     // restores the original selection.
     void invert() noexcept;
 
+    // Move the selection by (dx, dy) in document coordinates. Geometry is
+    // re-clipped to the current document bounds; the inverted flag is
+    // preserved.
+    void translate(double dx, double dy) noexcept;
+
+    // Scale the selection geometry and the stored document dimensions by the
+    // supplied factors. Used when the whole document is resampled.
+    void scale(double scaleX, double scaleY) noexcept;
+
+    // Rotate the selection geometry with the document. The stored document
+    // dimensions are updated to the rotated canvas size.
+    void rotate90Clockwise() noexcept;
+    void rotate90CounterClockwise() noexcept;
+    void rotate180() noexcept;
+
+    // Mirror the selection geometry within the document. Document dimensions
+    // are unchanged.
+    void flipHorizontal() noexcept;
+    void flipVertical() noexcept;
+
     // True when the continuous document point (x, y) is selected.
     [[nodiscard]] bool contains(double x, double y) const noexcept;
 

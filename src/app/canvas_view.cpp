@@ -10,6 +10,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QPixmap>
 #include <QResizeEvent>
@@ -125,6 +126,109 @@ private:
     core::Selection selection_;
 };
 
+// Crop rectangle overlay: dims everything outside the pending crop, draws a
+// rule-of-thirds grid, and exposes eight draggable handles. Hit testing lives
+// in CanvasView so the item itself never takes mouse events.
+class CropItem : public QGraphicsItem {
+public:
+    CropItem() {
+        setZValue(2.0);
+        setAcceptedMouseButtons(Qt::NoButton);
+    }
+
+    void setCanvasRect(const QRectF& rect) {
+        prepareGeometryChange();
+        canvasRect_ = rect;
+    }
+
+    void setCropRect(const QRectF& rect) {
+        prepareGeometryChange();
+        cropRect_ = rect;
+        update();
+    }
+
+    [[nodiscard]] QRectF cropRect() const noexcept {
+        return cropRect_;
+    }
+
+    [[nodiscard]] QRectF boundingRect() const override {
+        return canvasRect_.adjusted(-2.0, -2.0, 2.0, 2.0);
+    }
+
+    void paint(
+        QPainter* painter,
+        const QStyleOptionGraphicsItem*,
+        QWidget*
+    ) override {
+        if (canvasRect_.isEmpty() || cropRect_.isEmpty()) {
+            return;
+        }
+
+        QPainterPath outside;
+        outside.addRect(canvasRect_);
+        QPainterPath inside;
+        inside.addRect(cropRect_);
+        painter->fillPath(
+            outside.subtracted(inside),
+            QColor(0, 0, 0, 130)
+        );
+
+        QPen border(QColor(245, 245, 245), 1.0, Qt::SolidLine,
+                    Qt::SquareCap, Qt::MiterJoin);
+        border.setCosmetic(true);
+        painter->setPen(border);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRect(cropRect_);
+
+        QPen thirds(QColor(245, 245, 245, 120), 1.0, Qt::DashLine);
+        thirds.setCosmetic(true);
+        painter->setPen(thirds);
+        const double oneThirdX = cropRect_.left() + cropRect_.width() / 3.0;
+        const double twoThirdsX = cropRect_.left() + cropRect_.width() * 2.0 / 3.0;
+        const double oneThirdY = cropRect_.top() + cropRect_.height() / 3.0;
+        const double twoThirdsY = cropRect_.top() + cropRect_.height() * 2.0 / 3.0;
+        painter->drawLine(QPointF(oneThirdX, cropRect_.top()),
+                          QPointF(oneThirdX, cropRect_.bottom()));
+        painter->drawLine(QPointF(twoThirdsX, cropRect_.top()),
+                          QPointF(twoThirdsX, cropRect_.bottom()));
+        painter->drawLine(QPointF(cropRect_.left(), oneThirdY),
+                          QPointF(cropRect_.right(), oneThirdY));
+        painter->drawLine(QPointF(cropRect_.left(), twoThirdsY),
+                          QPointF(cropRect_.right(), twoThirdsY));
+
+        const double scale = std::abs(painter->worldTransform().m11());
+        const double handleSize = scale > 1.0e-9 ? 7.0 / scale : 7.0;
+        const double half = handleSize * 0.5;
+        const QPointF handles[] = {
+            cropRect_.topLeft(),
+            QPointF(cropRect_.center().x(), cropRect_.top()),
+            cropRect_.topRight(),
+            QPointF(cropRect_.left(), cropRect_.center().y()),
+            QPointF(cropRect_.right(), cropRect_.center().y()),
+            cropRect_.bottomLeft(),
+            QPointF(cropRect_.center().x(), cropRect_.bottom()),
+            cropRect_.bottomRight(),
+        };
+
+        const QPen handlePen(QColor(25, 25, 28), 1.0);
+        for (const QPointF& handle : handles) {
+            const QRectF handleRect(
+                handle.x() - half,
+                handle.y() - half,
+                handleSize,
+                handleSize
+            );
+            painter->fillRect(handleRect, QColor(245, 245, 245));
+            painter->setPen(handlePen);
+            painter->drawRect(handleRect);
+        }
+    }
+
+private:
+    QRectF canvasRect_;
+    QRectF cropRect_;
+};
+
 CanvasView::CanvasView(QWidget* parent)
     : QGraphicsView(parent) {
     setObjectName(QStringLiteral("canvasView"));
@@ -155,6 +259,10 @@ CanvasView::CanvasView(QWidget* parent)
     selectionItem_->hide();
     scene_->addItem(selectionItem_);
 
+    cropItem_ = new CropItem();
+    cropItem_->hide();
+    scene_->addItem(cropItem_);
+
     checkerboard_->hide();
     pixmapItem_->hide();
 }
@@ -165,12 +273,16 @@ void CanvasView::setImage(const QImage& image) {
         checkerboard_->hide();
         pixmapItem_->hide();
         scene_->setSceneRect(QRectF());
+        clearCrop();
         applyZoom(1.0, false);
         return;
     }
 
     const bool hadImage = !imageSize_.isEmpty();
     const bool sizeChanged = imageSize_ != image.size();
+    if (sizeChanged) {
+        clearCrop();
+    }
 
     imageSize_ = image.size();
     pixmapItem_->setPixmap(QPixmap::fromImage(image));
@@ -217,13 +329,117 @@ void CanvasView::setActiveTool(Tool tool) {
     }
     drawing_ = false;
     panning_ = false;
+    cropDragging_ = false;
+    cropHandle_ = CropHandle::None;
     setCursor(Qt::CrossCursor);
     selectionItem_->hide();
+    updateCropItem();
 }
 
 void CanvasView::setSelection(const core::Selection& selection) {
     selectionItem_->setSelection(selection);
     selectionItem_->setVisible(!selection.isEmpty());
+}
+
+void CanvasView::setCropRect(const QRectF& rect) {
+    const QRectF clamped = clampCropRect(rect);
+    if (clamped.isEmpty()) {
+        clearCrop();
+        return;
+    }
+    hasCrop_ = true;
+    cropItem_->setCropRect(clamped);
+    updateCropItem();
+}
+
+void CanvasView::clearCrop() {
+    hasCrop_ = false;
+    cropDragging_ = false;
+    cropHandle_ = CropHandle::None;
+    cropItem_->setCropRect(QRectF());
+    updateCropItem();
+}
+
+QRectF CanvasView::cropRect() const noexcept {
+    return hasCrop_ ? cropItem_->cropRect() : QRectF();
+}
+
+bool CanvasView::hasCrop() const noexcept {
+    return hasCrop_;
+}
+
+QRectF CanvasView::clampCropRect(const QRectF& rect) const {
+    if (imageSize_.isEmpty() || rect.isNull()) {
+        return {};
+    }
+    const QRectF bounds(0.0, 0.0,
+                        static_cast<double>(imageSize_.width()),
+                        static_cast<double>(imageSize_.height()));
+    const QRectF clipped = rect.normalized().intersected(bounds);
+    if (clipped.width() <= 0.0 || clipped.height() <= 0.0) {
+        return {};
+    }
+    return clipped;
+}
+
+CanvasView::CropHandle CanvasView::cropHandleAt(const QPointF& point) const {
+    if (!hasCrop_ || imageSize_.isEmpty()) {
+        return CropHandle::None;
+    }
+    const QRectF rect = cropRect();
+    if (rect.isEmpty()) {
+        return CropHandle::None;
+    }
+
+    const double tolerance = 9.0 / std::max(zoom_, 1.0e-6);
+    const bool nearLeft = std::abs(point.x() - rect.left()) <= tolerance;
+    const bool nearRight = std::abs(point.x() - rect.right()) <= tolerance;
+    const bool nearTop = std::abs(point.y() - rect.top()) <= tolerance;
+    const bool nearBottom = std::abs(point.y() - rect.bottom()) <= tolerance;
+    const bool verticallyInside =
+        point.y() >= rect.top() - tolerance &&
+        point.y() <= rect.bottom() + tolerance;
+    const bool horizontallyInside =
+        point.x() >= rect.left() - tolerance &&
+        point.x() <= rect.right() + tolerance;
+
+    if (nearLeft && nearTop) {
+        return CropHandle::TopLeft;
+    }
+    if (nearRight && nearTop) {
+        return CropHandle::TopRight;
+    }
+    if (nearLeft && nearBottom) {
+        return CropHandle::BottomLeft;
+    }
+    if (nearRight && nearBottom) {
+        return CropHandle::BottomRight;
+    }
+    if (nearLeft && verticallyInside) {
+        return CropHandle::Left;
+    }
+    if (nearRight && verticallyInside) {
+        return CropHandle::Right;
+    }
+    if (nearTop && horizontallyInside) {
+        return CropHandle::Top;
+    }
+    if (nearBottom && horizontallyInside) {
+        return CropHandle::Bottom;
+    }
+    if (rect.contains(point)) {
+        return CropHandle::Move;
+    }
+    return CropHandle::None;
+}
+
+void CanvasView::updateCropItem() {
+    cropItem_->setCanvasRect(
+        QRectF(0.0, 0.0,
+               static_cast<double>(imageSize_.width()),
+               static_cast<double>(imageSize_.height()))
+    );
+    cropItem_->setVisible(hasCrop_ && activeTool_ == Tool::Crop);
 }
 
 double CanvasView::clampZoom(double zoom) noexcept {
@@ -266,6 +482,7 @@ void CanvasView::updateSceneBounds() {
     const QRectF bounds(0, 0, imageSize_.width(), imageSize_.height());
     scene_->setSceneRect(bounds);
     checkerboard_->setRect(bounds);
+    cropItem_->setCanvasRect(bounds);
 }
 
 void CanvasView::setZoom(double zoom) {
@@ -340,6 +557,22 @@ void CanvasView::mousePressEvent(QMouseEvent* event) {
         case Tool::BucketFill:
             emit bucketFillRequested(documentPos);
             break;
+        case Tool::Crop: {
+            cropStartPoint_ = documentPos;
+            cropStartRect_ = hasCrop_ ? cropRect() : QRectF();
+            cropHandle_ = cropHandleAt(documentPos);
+            if (cropHandle_ == CropHandle::None) {
+                cropHandle_ = CropHandle::New;
+                hasCrop_ = true;
+                cropItem_->setCropRect(
+                    QRectF(documentPos, QSizeF(0.0, 0.0))
+                );
+            }
+            cropDragging_ = true;
+            updateCropItem();
+            emit cropRectChanged(cropRect());
+            break;
+        }
         }
         event->accept();
         return;
@@ -354,6 +587,14 @@ void CanvasView::mousePressEvent(QMouseEvent* event) {
     }
 
     if (event->button() == Qt::RightButton) {
+        if (activeTool_ == Tool::Crop && hasCrop_) {
+            cropDragging_ = false;
+            clearCrop();
+            emit cropRectChanged(QRectF());
+            emit cropCancelRequested();
+            event->accept();
+            return;
+        }
         if (selecting_) {
             selecting_ = false;
             emit selectionDragCancelled();
@@ -386,6 +627,73 @@ void CanvasView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
+    if (cropDragging_) {
+        const QPointF point = documentPosition(event->position());
+        QRectF rect;
+        switch (cropHandle_) {
+        case CropHandle::New:
+            rect = QRectF(cropStartPoint_, point).normalized();
+            break;
+        case CropHandle::Move: {
+            const double deltaX = point.x() - cropStartPoint_.x();
+            const double deltaY = point.y() - cropStartPoint_.y();
+            rect = cropStartRect_.translated(deltaX, deltaY);
+            const double maxX = std::max(
+                0.0,
+                static_cast<double>(imageSize_.width()) - rect.width()
+            );
+            const double maxY = std::max(
+                0.0,
+                static_cast<double>(imageSize_.height()) - rect.height()
+            );
+            rect.moveLeft(std::clamp(rect.left(), 0.0, maxX));
+            rect.moveTop(std::clamp(rect.top(), 0.0, maxY));
+            break;
+        }
+        default: {
+            double left = cropStartRect_.left();
+            double top = cropStartRect_.top();
+            double right = cropStartRect_.right();
+            double bottom = cropStartRect_.bottom();
+            if (cropHandle_ == CropHandle::Left ||
+                cropHandle_ == CropHandle::TopLeft ||
+                cropHandle_ == CropHandle::BottomLeft) {
+                left = point.x();
+            }
+            if (cropHandle_ == CropHandle::Right ||
+                cropHandle_ == CropHandle::TopRight ||
+                cropHandle_ == CropHandle::BottomRight) {
+                right = point.x();
+            }
+            if (cropHandle_ == CropHandle::Top ||
+                cropHandle_ == CropHandle::TopLeft ||
+                cropHandle_ == CropHandle::TopRight) {
+                top = point.y();
+            }
+            if (cropHandle_ == CropHandle::Bottom ||
+                cropHandle_ == CropHandle::BottomLeft ||
+                cropHandle_ == CropHandle::BottomRight) {
+                bottom = point.y();
+            }
+            rect = QRectF(QPointF(left, top), QPointF(right, bottom))
+                       .normalized();
+            break;
+        }
+        }
+
+        const QRectF clamped = clampCropRect(rect);
+        if (clamped.isEmpty()) {
+            cropItem_->setCropRect(QRectF());
+            emit cropRectChanged(QRectF());
+        } else {
+            cropItem_->setCropRect(clamped);
+            emit cropRectChanged(clamped);
+        }
+        updateCropItem();
+        event->accept();
+        return;
+    }
+
     if (selecting_) {
         emit selectionDragMoved(documentPosition(event->position()));
         event->accept();
@@ -402,6 +710,20 @@ void CanvasView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void CanvasView::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && cropDragging_) {
+        cropDragging_ = false;
+        cropHandle_ = CropHandle::None;
+        const QRectF rect = cropRect();
+        if (rect.width() < 1.0 || rect.height() < 1.0) {
+            clearCrop();
+            emit cropRectChanged(QRectF());
+        } else {
+            emit cropRectChanged(rect);
+        }
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton && selecting_) {
         selecting_ = false;
         emit selectionDragCompleted(selectionStart_,
@@ -428,7 +750,23 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void CanvasView::keyPressEvent(QKeyEvent* event) {
+    if (activeTool_ == Tool::Crop &&
+        (event->key() == Qt::Key_Return ||
+         event->key() == Qt::Key_Enter)) {
+        if (hasCrop_) {
+            emit cropApplyRequested();
+            event->accept();
+            return;
+        }
+    }
     if (event->key() == Qt::Key_Escape) {
+        if (activeTool_ == Tool::Crop && hasCrop_) {
+            clearCrop();
+            emit cropRectChanged(QRectF());
+            emit cropCancelRequested();
+            event->accept();
+            return;
+        }
         if (selecting_) {
             selecting_ = false;
             emit selectionDragCancelled();

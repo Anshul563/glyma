@@ -1,5 +1,6 @@
 #include "glyma/app/main_window.hpp"
 
+#include <cmath>
 #include <cstdint>
 
 #include <QAction>
@@ -7,8 +8,10 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QColor>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -16,6 +19,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -36,6 +40,7 @@
 #include "glyma/app/canvas_view.hpp"
 #include "glyma/app/layer_dock.hpp"
 #include "glyma/app/qt_image.hpp"
+#include "glyma/core/transform.hpp"
 
 namespace glyma::app {
 namespace {
@@ -118,6 +123,85 @@ void MainWindow::createActions() {
         this, tr("&Redo"), QKeySequence::Redo, QStringLiteral("actionEditRedo")
     );
 
+    cropAction_ = makeAction(
+        this, tr("&Crop"), QKeySequence(QStringLiteral("C")),
+        QStringLiteral("actionImageCrop")
+    );
+    cropApplyAction_ = makeAction(
+        this, tr("&Apply Crop"),
+        QKeySequence(QStringLiteral("Ctrl+Return")),
+        QStringLiteral("actionImageCropApply")
+    );
+    cropCancelAction_ = makeAction(
+        this, tr("Cancel Crop"), QKeySequence(),
+        QStringLiteral("actionImageCropCancel")
+    );
+    imageSizeAction_ = makeAction(
+        this, tr("&Image Size..."), QKeySequence(QStringLiteral("Ctrl+Alt+I")),
+        QStringLiteral("actionImageResize")
+    );
+    canvasSizeAction_ = makeAction(
+        this, tr("&Canvas Size..."), QKeySequence(QStringLiteral("Ctrl+Alt+C")),
+        QStringLiteral("actionCanvasSize")
+    );
+    rotateCanvasCWAction_ = makeAction(
+        this, tr("Rotate Canvas 90\u00b0 Clockwise"), QKeySequence(),
+        QStringLiteral("actionImageRotateCW")
+    );
+    rotateCanvasCCWAction_ = makeAction(
+        this, tr("Rotate Canvas 90\u00b0 Counterclockwise"), QKeySequence(),
+        QStringLiteral("actionImageRotateCCW")
+    );
+    rotateCanvas180Action_ = makeAction(
+        this, tr("Rotate Canvas 180\u00b0"), QKeySequence(),
+        QStringLiteral("actionImageRotate180")
+    );
+    rotateCanvasFreeAction_ = makeAction(
+        this, tr("Rotate Canvas by Angle..."), QKeySequence(),
+        QStringLiteral("actionImageRotateFree")
+    );
+    flipCanvasHorizontalAction_ = makeAction(
+        this, tr("Flip Canvas Horizontal"), QKeySequence(),
+        QStringLiteral("actionImageFlipHorizontal")
+    );
+    flipCanvasVerticalAction_ = makeAction(
+        this, tr("Flip Canvas Vertical"), QKeySequence(),
+        QStringLiteral("actionImageFlipVertical")
+    );
+
+    rotateLayerCWAction_ = makeAction(
+        this, tr("Rotate Layer 90\u00b0 Clockwise"), QKeySequence(),
+        QStringLiteral("actionLayerRotateCW")
+    );
+    rotateLayerCCWAction_ = makeAction(
+        this, tr("Rotate Layer 90\u00b0 Counterclockwise"), QKeySequence(),
+        QStringLiteral("actionLayerRotateCCW")
+    );
+    rotateLayer180Action_ = makeAction(
+        this, tr("Rotate Layer 180\u00b0"), QKeySequence(),
+        QStringLiteral("actionLayerRotate180")
+    );
+    rotateLayerFreeAction_ = makeAction(
+        this, tr("Rotate Layer by Angle..."), QKeySequence(),
+        QStringLiteral("actionLayerRotateFree")
+    );
+    flipLayerHorizontalAction_ = makeAction(
+        this, tr("Flip Layer Horizontal"), QKeySequence(),
+        QStringLiteral("actionLayerFlipHorizontal")
+    );
+    flipLayerVerticalAction_ = makeAction(
+        this, tr("Flip Layer Vertical"), QKeySequence(),
+        QStringLiteral("actionLayerFlipVertical")
+    );
+    scaleLayerAction_ = makeAction(
+        this, tr("Scale Layer..."), QKeySequence(),
+        QStringLiteral("actionLayerScale")
+    );
+    translateLayerAction_ = makeAction(
+        this, tr("Move Layer..."), QKeySequence(),
+        QStringLiteral("actionLayerMove")
+    );
+
     zoomInAction_ = makeAction(
         this,
         tr("Zoom &In"),
@@ -143,15 +227,15 @@ void MainWindow::createActions() {
         QStringLiteral("actionViewResetZoom")
     );
 
-    aboutAction_ = makeAction(
-        this, tr("&About Glyma"), QKeySequence(), QStringLiteral("actionHelpAbout")
-    );
-
     imageAdjustmentsAction_ = makeAction(
         this,
         tr("A&djustments..."),
         QKeySequence(QStringLiteral("Ctrl+M")),
         QStringLiteral("actionImageAdjustments")
+    );
+
+    aboutAction_ = makeAction(
+        this, tr("&About Glyma"), QKeySequence(), QStringLiteral("actionHelpAbout")
     );
 
     newAction_->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
@@ -160,6 +244,9 @@ void MainWindow::createActions() {
     undoAction_->setIcon(style()->standardIcon(QStyle::SP_ArrowBack));
     redoAction_->setIcon(style()->standardIcon(QStyle::SP_ArrowForward));
     exitAction_->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
+    cropAction_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    cropApplyAction_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    cropCancelAction_->setIcon(style()->standardIcon(QStyle::SP_DialogCancelButton));
 
     connect(newAction_, &QAction::triggered, this, [this] { onNew(); });
     connect(openAction_, &QAction::triggered, this, [this] { onOpen(); });
@@ -175,6 +262,51 @@ void MainWindow::createActions() {
     connect(resetZoomAction_, &QAction::triggered, canvas_, &CanvasView::resetZoom);
     connect(imageAdjustmentsAction_, &QAction::triggered, this, [this] { onAdjustments(); });
     connect(aboutAction_, &QAction::triggered, this, [this] { onAbout(); });
+
+    connect(cropApplyAction_, &QAction::triggered, this, [this] { onCropApply(); });
+    connect(cropCancelAction_, &QAction::triggered, this, [this] { onCropCancel(); });
+    connect(canvasSizeAction_, &QAction::triggered, this, [this] { onCanvasSize(); });
+    connect(imageSizeAction_, &QAction::triggered, this, [this] { onImageSize(); });
+    connect(rotateCanvasCWAction_, &QAction::triggered, this, [this] {
+        onRotateCanvas90(true);
+    });
+    connect(rotateCanvasCCWAction_, &QAction::triggered, this, [this] {
+        onRotateCanvas90(false);
+    });
+    connect(rotateCanvas180Action_, &QAction::triggered, this, [this] {
+        onRotateCanvas180();
+    });
+    connect(rotateCanvasFreeAction_, &QAction::triggered, this, [this] {
+        onArbitraryRotateCanvas();
+    });
+    connect(flipCanvasHorizontalAction_, &QAction::triggered, this, [this] {
+        onFlipCanvas(true);
+    });
+    connect(flipCanvasVerticalAction_, &QAction::triggered, this, [this] {
+        onFlipCanvas(false);
+    });
+    connect(rotateLayerCWAction_, &QAction::triggered, this, [this] {
+        onRotateLayer(core::LayerTransform::Rotate90Clockwise);
+    });
+    connect(rotateLayerCCWAction_, &QAction::triggered, this, [this] {
+        onRotateLayer(core::LayerTransform::Rotate90CounterClockwise);
+    });
+    connect(rotateLayer180Action_, &QAction::triggered, this, [this] {
+        onRotateLayer(core::LayerTransform::Rotate180);
+    });
+    connect(rotateLayerFreeAction_, &QAction::triggered, this, [this] {
+        onArbitraryRotateLayer();
+    });
+    connect(flipLayerHorizontalAction_, &QAction::triggered, this, [this] {
+        onFlipLayer(true);
+    });
+    connect(flipLayerVerticalAction_, &QAction::triggered, this, [this] {
+        onFlipLayer(false);
+    });
+    connect(scaleLayerAction_, &QAction::triggered, this, [this] { onScaleLayer(); });
+    connect(translateLayerAction_, &QAction::triggered, this, [this] {
+        onTranslateLayer();
+    });
 }
 
 void MainWindow::createMenus() {
@@ -283,12 +415,18 @@ void MainWindow::createToolOptions() {
         style()->standardIcon(QStyle::SP_DialogApplyButton)
     );
 
+    cropAction_->setCheckable(true);
+
     toolGroup_->addAction(rectangleSelectAction_);
     toolGroup_->addAction(ellipseSelectAction_);
     toolGroup_->addAction(bucketFillAction_);
+    toolGroup_->addAction(cropAction_);
     toolBar->addAction(rectangleSelectAction_);
     toolBar->addAction(ellipseSelectAction_);
     toolBar->addAction(bucketFillAction_);
+    toolBar->addAction(cropAction_);
+    toolBar->addAction(cropApplyAction_);
+    toolBar->addAction(cropCancelAction_);
     toolBar->addSeparator();
 
     clearSelectionAction_ = makeAction(
@@ -394,6 +532,11 @@ void MainWindow::createToolOptions() {
             canvas_->setActiveTool(CanvasView::Tool::BucketFill);
         }
     });
+    connect(cropAction_, &QAction::toggled, this, [this](bool checked) {
+        if (checked) {
+            canvas_->setActiveTool(CanvasView::Tool::Crop);
+        }
+    });
     connect(clearSelectionAction_, &QAction::triggered, this, [this] {
         controller_.clearSelection();
     });
@@ -466,6 +609,15 @@ void MainWindow::connectSignals() {
     });
     connect(canvas_, &CanvasView::bucketFillRequested, this, [this](const QPointF& position) {
         controller_.bucketFill(position.x(), position.y());
+    });
+    connect(canvas_, &CanvasView::cropRectChanged, this, [this](const QRectF&) {
+        updateActions();
+    });
+    connect(canvas_, &CanvasView::cropApplyRequested, this, [this] {
+        onCropApply();
+    });
+    connect(canvas_, &CanvasView::cropCancelRequested, this, [this] {
+        onCropCancel();
     });
 
     connect(&controller_, &AppController::documentChanged, this, [this] {
@@ -733,6 +885,27 @@ void MainWindow::refreshStatus() {
 void MainWindow::updateActions() {
     undoAction_->setEnabled(controller_.canUndo());
     redoAction_->setEnabled(controller_.canRedo());
+
+    const QRectF crop = canvas_->cropRect();
+    const bool hasUsableCrop =
+        canvas_->hasCrop() &&
+        crop.width() >= 1.0 &&
+        crop.height() >= 1.0;
+    cropApplyAction_->setEnabled(hasUsableCrop);
+    cropCancelAction_->setEnabled(canvas_->hasCrop());
+
+    const bool hasLayer =
+        controller_.document().findLayer(
+            controller_.selectedLayerId()
+        ) != nullptr;
+    rotateLayerCWAction_->setEnabled(hasLayer);
+    rotateLayerCCWAction_->setEnabled(hasLayer);
+    rotateLayer180Action_->setEnabled(hasLayer);
+    rotateLayerFreeAction_->setEnabled(hasLayer);
+    flipLayerHorizontalAction_->setEnabled(hasLayer);
+    flipLayerVerticalAction_->setEnabled(hasLayer);
+    scaleLayerAction_->setEnabled(hasLayer);
+    translateLayerAction_->setEnabled(hasLayer);
 }
 
 void MainWindow::updateTitle() {
@@ -1067,6 +1240,458 @@ void MainWindow::onAdjustments() {
         }
     } else {
         controller_.cancelAdjustment();
+    }
+}
+
+void MainWindow::onCropApply() {
+    if (!canvas_->hasCrop()) {
+        return;
+    }
+    const QRectF rect = canvas_->cropRect();
+    const auto& document = controller_.document();
+    const core::CropRect crop = core::cropRectFromPoints(
+        rect.left(), rect.top(), rect.right(), rect.bottom(),
+        document.width(), document.height()
+    );
+    if (crop.isEmpty()) {
+        updateActions();
+        return;
+    }
+    if (controller_.crop(crop)) {
+        canvas_->clearCrop();
+        statusBar()->showMessage(
+            tr("Cropped to %1 x %2 px")
+                .arg(document.width())
+                .arg(document.height()),
+            3000
+        );
+    }
+    updateActions();
+}
+
+void MainWindow::onCropCancel() {
+    canvas_->clearCrop();
+    updateActions();
+    statusBar()->showMessage(tr("Crop cancelled."), 2000);
+}
+
+void MainWindow::onCanvasSize() {
+    const auto& document = controller_.document();
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Canvas Size"));
+    auto* layout = new QFormLayout(&dialog);
+
+    auto* widthSpin = new QSpinBox(&dialog);
+    widthSpin->setObjectName(QStringLiteral("canvasWidthSpin"));
+    widthSpin->setRange(1, 100000);
+    widthSpin->setValue(static_cast<int>(document.width()));
+    widthSpin->setSuffix(tr(" px"));
+
+    auto* heightSpin = new QSpinBox(&dialog);
+    heightSpin->setObjectName(QStringLiteral("canvasHeightSpin"));
+    heightSpin->setRange(1, 100000);
+    heightSpin->setValue(static_cast<int>(document.height()));
+    heightSpin->setSuffix(tr(" px"));
+
+    auto* anchorCombo = new QComboBox(&dialog);
+    anchorCombo->setObjectName(QStringLiteral("canvasAnchorCombo"));
+    anchorCombo->addItems({
+        tr("Top Left"), tr("Top Center"), tr("Top Right"),
+        tr("Center Left"), tr("Center"), tr("Center Right"),
+        tr("Bottom Left"), tr("Bottom Center"), tr("Bottom Right"),
+    });
+    anchorCombo->setCurrentIndex(4);
+
+    auto* preview = new QLabel(&dialog);
+    preview->setObjectName(QStringLiteral("canvasSizePreview"));
+    const auto updatePreview = [&document, widthSpin, heightSpin, preview] {
+        const auto width = static_cast<std::uint32_t>(widthSpin->value());
+        const auto height = static_cast<std::uint32_t>(heightSpin->value());
+        const bool valid = core::isValidCanvasSize(width, height);
+        preview->setText(
+            valid
+                ? tr("New canvas: %1 x %2 px (layers keep their pixel size)")
+                      .arg(width)
+                      .arg(height)
+                : tr("Canvas exceeds the supported size limit.")
+        );
+    };
+    QObject::connect(
+        widthSpin, &QSpinBox::valueChanged, &dialog, updatePreview
+    );
+    QObject::connect(
+        heightSpin, &QSpinBox::valueChanged, &dialog, updatePreview
+    );
+    updatePreview();
+
+    layout->addRow(tr("Width:"), widthSpin);
+    layout->addRow(tr("Height:"), heightSpin);
+    layout->addRow(tr("Anchor:"), anchorCombo);
+    layout->addRow(preview);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog
+    );
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, widthSpin, heightSpin] {
+        if (!core::isValidCanvasSize(
+                static_cast<std::uint32_t>(widthSpin->value()),
+                static_cast<std::uint32_t>(heightSpin->value()))) {
+            QMessageBox::warning(
+                &dialog, tr("Canvas Size"),
+                tr("The requested canvas exceeds the supported size limit.")
+            );
+            return;
+        }
+        dialog.accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const auto anchor = static_cast<core::Anchor>(anchorCombo->currentIndex());
+    if (controller_.resizeCanvas(
+            static_cast<std::uint32_t>(widthSpin->value()),
+            static_cast<std::uint32_t>(heightSpin->value()),
+            anchor
+        )) {
+        canvas_->clearCrop();
+        statusBar()->showMessage(
+            tr("Canvas resized to %1 x %2 px")
+                .arg(widthSpin->value())
+                .arg(heightSpin->value()),
+            3000
+        );
+    }
+}
+
+void MainWindow::onImageSize() {
+    const auto& document = controller_.document();
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Image Size"));
+    auto* layout = new QFormLayout(&dialog);
+
+    auto* widthSpin = new QSpinBox(&dialog);
+    widthSpin->setObjectName(QStringLiteral("imageWidthSpin"));
+    widthSpin->setRange(1, 100000);
+    widthSpin->setValue(static_cast<int>(document.width()));
+    widthSpin->setSuffix(tr(" px"));
+
+    auto* heightSpin = new QSpinBox(&dialog);
+    heightSpin->setObjectName(QStringLiteral("imageHeightSpin"));
+    heightSpin->setRange(1, 100000);
+    heightSpin->setValue(static_cast<int>(document.height()));
+    heightSpin->setSuffix(tr(" px"));
+
+    auto* maintainAspect = new QCheckBox(tr("Maintain aspect ratio"), &dialog);
+    maintainAspect->setChecked(true);
+
+    auto* preview = new QLabel(&dialog);
+    preview->setObjectName(QStringLiteral("imageSizePreview"));
+    const auto updatePreview = [widthSpin, heightSpin, preview] {
+        const auto width = static_cast<std::uint32_t>(widthSpin->value());
+        const auto height = static_cast<std::uint32_t>(heightSpin->value());
+        const bool valid = core::isValidCanvasSize(width, height);
+        preview->setText(
+            valid
+                ? tr("New image: %1 x %2 px (all layers resampled)")
+                      .arg(width)
+                      .arg(height)
+                : tr("Image exceeds the supported size limit.")
+        );
+    };
+
+    const double aspect =
+        static_cast<double>(document.width()) /
+        static_cast<double>(document.height());
+    bool syncing = false;
+    QObject::connect(
+        widthSpin, &QSpinBox::valueChanged, &dialog,
+        [widthSpin, heightSpin, maintainAspect, aspect, &syncing, updatePreview](int value) {
+            if (syncing) {
+                return;
+            }
+            if (maintainAspect->isChecked()) {
+                syncing = true;
+                heightSpin->setValue(std::max(
+                    1,
+                    static_cast<int>(std::lround(
+                        static_cast<double>(value) / aspect
+                    ))
+                ));
+                syncing = false;
+            }
+            updatePreview();
+        }
+    );
+    QObject::connect(
+        heightSpin, &QSpinBox::valueChanged, &dialog,
+        [widthSpin, heightSpin, maintainAspect, aspect, &syncing, updatePreview](int value) {
+            if (syncing) {
+                return;
+            }
+            if (maintainAspect->isChecked()) {
+                syncing = true;
+                widthSpin->setValue(std::max(
+                    1,
+                    static_cast<int>(std::lround(
+                        static_cast<double>(value) * aspect
+                    ))
+                ));
+                syncing = false;
+            }
+            updatePreview();
+        }
+    );
+    QObject::connect(
+        maintainAspect, &QCheckBox::toggled, &dialog, updatePreview
+    );
+    updatePreview();
+
+    layout->addRow(tr("Width:"), widthSpin);
+    layout->addRow(tr("Height:"), heightSpin);
+    layout->addRow(QString(), maintainAspect);
+    layout->addRow(preview);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog
+    );
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, widthSpin, heightSpin] {
+        if (!core::isValidCanvasSize(
+                static_cast<std::uint32_t>(widthSpin->value()),
+                static_cast<std::uint32_t>(heightSpin->value()))) {
+            QMessageBox::warning(
+                &dialog, tr("Image Size"),
+                tr("The requested image exceeds the supported size limit.")
+            );
+            return;
+        }
+        dialog.accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    if (controller_.resizeImage(
+            static_cast<std::uint32_t>(widthSpin->value()),
+            static_cast<std::uint32_t>(heightSpin->value())
+        )) {
+        canvas_->clearCrop();
+        statusBar()->showMessage(
+            tr("Image resized to %1 x %2 px")
+                .arg(widthSpin->value())
+                .arg(heightSpin->value()),
+            3000
+        );
+    }
+}
+
+void MainWindow::onArbitraryRotateCanvas() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Rotate Canvas"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* angleSpin = new QDoubleSpinBox(&dialog);
+    angleSpin->setObjectName(QStringLiteral("canvasAngleSpin"));
+    angleSpin->setRange(-3600.0, 3600.0);
+    angleSpin->setDecimals(2);
+    angleSpin->setSuffix(tr(" degrees"));
+    angleSpin->setValue(0.0);
+    layout->addRow(tr("Angle:"), angleSpin);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog
+    );
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, angleSpin] {
+        if (std::abs(angleSpin->value()) < 1.0e-9) {
+            return;
+        }
+        dialog.accept();
+    });
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    if (controller_.rotateCanvas(angleSpin->value())) {
+        canvas_->clearCrop();
+        statusBar()->showMessage(tr("Canvas rotated."), 3000);
+    }
+}
+
+void MainWindow::onRotateCanvas90(bool clockwise) {
+    if (controller_.rotateCanvas90(clockwise)) {
+        canvas_->clearCrop();
+        statusBar()->showMessage(tr("Canvas rotated 90 degrees."), 3000);
+    }
+}
+
+void MainWindow::onRotateCanvas180() {
+    if (controller_.rotateCanvas180()) {
+        canvas_->clearCrop();
+        statusBar()->showMessage(tr("Canvas rotated 180 degrees."), 3000);
+    }
+}
+
+void MainWindow::onFlipCanvas(bool horizontal) {
+    if (controller_.flipCanvas(horizontal)) {
+        canvas_->clearCrop();
+        statusBar()->showMessage(
+            horizontal ? tr("Canvas flipped horizontally.")
+                       : tr("Canvas flipped vertically."),
+            3000
+        );
+    }
+}
+
+void MainWindow::onScaleLayer() {
+    const core::LayerId id = controller_.selectedLayerId();
+    const core::Layer* layer = controller_.document().findLayer(id);
+    if (layer == nullptr) {
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Scale Layer"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* widthSpin = new QSpinBox(&dialog);
+    widthSpin->setObjectName(QStringLiteral("layerWidthSpin"));
+    widthSpin->setRange(1, 100000);
+    widthSpin->setValue(static_cast<int>(layer->width()));
+    widthSpin->setSuffix(tr(" px"));
+    auto* heightSpin = new QSpinBox(&dialog);
+    heightSpin->setObjectName(QStringLiteral("layerHeightSpin"));
+    heightSpin->setRange(1, 100000);
+    heightSpin->setValue(static_cast<int>(layer->height()));
+    heightSpin->setSuffix(tr(" px"));
+    layout->addRow(tr("Width:"), widthSpin);
+    layout->addRow(tr("Height:"), heightSpin);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog
+    );
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, widthSpin, heightSpin] {
+        if (!core::isValidCanvasSize(
+                static_cast<std::uint32_t>(widthSpin->value()),
+                static_cast<std::uint32_t>(heightSpin->value()))) {
+            QMessageBox::warning(
+                &dialog, tr("Scale Layer"),
+                tr("The requested layer size is outside the supported range.")
+            );
+            return;
+        }
+        dialog.accept();
+    });
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    if (controller_.scaleLayer(
+            id,
+            static_cast<std::uint32_t>(widthSpin->value()),
+            static_cast<std::uint32_t>(heightSpin->value())
+        )) {
+        statusBar()->showMessage(tr("Layer scaled."), 3000);
+    }
+}
+
+void MainWindow::onRotateLayer(core::LayerTransform transform) {
+    if (controller_.transformLayer(controller_.selectedLayerId(), transform)) {
+        statusBar()->showMessage(tr("Layer transformed."), 3000);
+    }
+}
+
+void MainWindow::onArbitraryRotateLayer() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Rotate Layer"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* angleSpin = new QDoubleSpinBox(&dialog);
+    angleSpin->setObjectName(QStringLiteral("layerAngleSpin"));
+    angleSpin->setRange(-3600.0, 3600.0);
+    angleSpin->setDecimals(2);
+    angleSpin->setSuffix(tr(" degrees"));
+    angleSpin->setValue(0.0);
+    layout->addRow(tr("Angle:"), angleSpin);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog
+    );
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, angleSpin] {
+        if (std::abs(angleSpin->value()) < 1.0e-9) {
+            return;
+        }
+        dialog.accept();
+    });
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    if (controller_.rotateLayer(
+            controller_.selectedLayerId(), angleSpin->value()
+        )) {
+        statusBar()->showMessage(tr("Layer rotated."), 3000);
+    }
+}
+
+void MainWindow::onFlipLayer(bool horizontal) {
+    const core::LayerTransform transform = horizontal
+        ? core::LayerTransform::FlipHorizontal
+        : core::LayerTransform::FlipVertical;
+    if (controller_.transformLayer(controller_.selectedLayerId(), transform)) {
+        statusBar()->showMessage(
+            horizontal ? tr("Layer flipped horizontally.")
+                       : tr("Layer flipped vertically."),
+            3000
+        );
+    }
+}
+
+void MainWindow::onTranslateLayer() {
+    const core::LayerId id = controller_.selectedLayerId();
+    const core::Layer* layer = controller_.document().findLayer(id);
+    if (layer == nullptr) {
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Move Layer"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* xSpin = new QSpinBox(&dialog);
+    xSpin->setObjectName(QStringLiteral("layerXSpin"));
+    xSpin->setRange(-1000000, 1000000);
+    xSpin->setValue(layer->x());
+    xSpin->setSuffix(tr(" px"));
+    auto* ySpin = new QSpinBox(&dialog);
+    ySpin->setObjectName(QStringLiteral("layerYSpin"));
+    ySpin->setRange(-1000000, 1000000);
+    ySpin->setValue(layer->y());
+    ySpin->setSuffix(tr(" px"));
+    layout->addRow(tr("X offset:"), xSpin);
+    layout->addRow(tr("Y offset:"), ySpin);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog
+    );
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const std::int32_t deltaX =
+        static_cast<std::int32_t>(xSpin->value()) - layer->x();
+    const std::int32_t deltaY =
+        static_cast<std::int32_t>(ySpin->value()) - layer->y();
+    if (controller_.translateLayer(id, deltaX, deltaY)) {
+        statusBar()->showMessage(tr("Layer moved."), 3000);
     }
 }
 

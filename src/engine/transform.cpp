@@ -1,0 +1,1367 @@
+#include "glyma/core/transform.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+#include <vector>
+
+namespace glyma::core {
+namespace {
+
+constexpr double pi = 3.14159265358979323846;
+
+std::int32_t clampToInt32(std::int64_t value) noexcept {
+    const auto minimum = static_cast<std::int64_t>(
+        std::numeric_limits<std::int32_t>::min()
+    );
+    const auto maximum = static_cast<std::int64_t>(
+        std::numeric_limits<std::int32_t>::max()
+    );
+    return static_cast<std::int32_t>(std::clamp(value, minimum, maximum));
+}
+
+std::uint32_t checkedDimension(std::int64_t value) {
+    if (value <= 0) {
+        return 1;
+    }
+    if (value > static_cast<std::int64_t>(
+                    std::numeric_limits<std::uint32_t>::max())) {
+        throw std::invalid_argument("Transformed image dimensions are too large.");
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+[[nodiscard]] std::vector<LayerId> layerIds(const Document& document) {
+    std::vector<LayerId> ids;
+    ids.reserve(document.layerCount());
+    for (const Layer& layer : document.layerStack().layers()) {
+        ids.push_back(layer.id());
+    }
+    return ids;
+}
+
+struct BilinearSample {
+    float r{0.0F};
+    float g{0.0F};
+    float b{0.0F};
+    float a{0.0F};
+    float weight{0.0F};
+};
+
+// Sample using premultiplied alpha so transparent pixels do not bleed colour
+// into opaque neighbours. (x, y) is in source pixel coordinates; samples
+// outside the image contribute nothing.
+BilinearSample samplePremultiplied(
+    const ImageBuffer& source,
+    double x,
+    double y
+) {
+    BilinearSample result;
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+        return result;
+    }
+
+    const auto x0 = static_cast<std::int64_t>(std::floor(x));
+    const auto y0 = static_cast<std::int64_t>(std::floor(y));
+    const double fx = x - static_cast<double>(x0);
+    const double fy = y - static_cast<double>(y0);
+
+    for (int dy = 0; dy <= 1; ++dy) {
+        for (int dx = 0; dx <= 1; ++dx) {
+            const std::int64_t sx = x0 + dx;
+            const std::int64_t sy = y0 + dy;
+            if (sx < 0 || sy < 0 ||
+                sx >= static_cast<std::int64_t>(source.width()) ||
+                sy >= static_cast<std::int64_t>(source.height())) {
+                continue;
+            }
+
+            const double wx = dx == 0 ? 1.0 - fx : fx;
+            const double wy = dy == 0 ? 1.0 - fy : fy;
+            const double weight = wx * wy;
+            if (weight <= 0.0) {
+                continue;
+            }
+
+            const Pixel pixel = source.getPixel(
+                static_cast<std::uint32_t>(sx),
+                static_cast<std::uint32_t>(sy)
+            );
+            const float alpha = static_cast<float>(pixel.a) / 255.0F;
+            result.r += static_cast<float>(pixel.r) * alpha *
+                        static_cast<float>(weight);
+            result.g += static_cast<float>(pixel.g) * alpha *
+                        static_cast<float>(weight);
+            result.b += static_cast<float>(pixel.b) * alpha *
+                        static_cast<float>(weight);
+            result.a += alpha * static_cast<float>(weight);
+            result.weight += static_cast<float>(weight);
+        }
+    }
+    return result;
+}
+
+Pixel unpremultiply(const BilinearSample& sample) {
+    if (sample.a <= 1.0e-6F) {
+        return Pixel{0, 0, 0, 0};
+    }
+    const auto toByte = [](float value) {
+        return static_cast<std::uint8_t>(
+            std::clamp(std::lround(value), 0L, 255L)
+        );
+    };
+    return Pixel{
+        toByte(sample.r / sample.a),
+        toByte(sample.g / sample.a),
+        toByte(sample.b / sample.a),
+        toByte(sample.a * 255.0F)
+    };
+}
+
+bool nearlyQuarterTurn(double degrees, int& quarterTurns) noexcept {
+    if (!std::isfinite(degrees)) {
+        return false;
+    }
+    const double turns = degrees / 90.0;
+    const double rounded = std::round(turns);
+    if (std::abs(turns - rounded) > 1.0e-9) {
+        return false;
+    }
+    quarterTurns = static_cast<int>(rounded) % 4;
+    if (quarterTurns < 0) {
+        quarterTurns += 4;
+    }
+    return true;
+}
+
+bool applyDocumentOperation(
+    Document& document,
+    DocumentSnapshot& before,
+    bool& captured,
+    const std::function<void(Document&)>& operation
+) {
+    if (!captured) {
+        before = captureDocumentSnapshot(document);
+        captured = true;
+    }
+
+    try {
+        operation(document);
+        return true;
+    } catch (...) {
+        restoreDocumentSnapshot(document, before);
+        return false;
+    }
+}
+
+} // namespace
+
+double anchorFactorX(Anchor anchor) noexcept {
+    switch (anchor) {
+    case Anchor::TopLeft:
+    case Anchor::CenterLeft:
+    case Anchor::BottomLeft:
+        return 0.0;
+    case Anchor::TopCenter:
+    case Anchor::Center:
+    case Anchor::BottomCenter:
+        return 0.5;
+    case Anchor::TopRight:
+    case Anchor::CenterRight:
+    case Anchor::BottomRight:
+        return 1.0;
+    }
+    return 0.5;
+}
+
+double anchorFactorY(Anchor anchor) noexcept {
+    switch (anchor) {
+    case Anchor::TopLeft:
+    case Anchor::TopCenter:
+    case Anchor::TopRight:
+        return 0.0;
+    case Anchor::CenterLeft:
+    case Anchor::Center:
+    case Anchor::CenterRight:
+        return 0.5;
+    case Anchor::BottomLeft:
+    case Anchor::BottomCenter:
+    case Anchor::BottomRight:
+        return 1.0;
+    }
+    return 0.5;
+}
+
+bool isValidCanvasSize(
+    std::uint32_t width,
+    std::uint32_t height
+) noexcept {
+    if (width == 0 || height == 0) {
+        return false;
+    }
+    const std::uint64_t pixels =
+        static_cast<std::uint64_t>(width) *
+        static_cast<std::uint64_t>(height);
+    return pixels <= Document::maxPixelCount;
+}
+
+CropRect clipCropRect(
+    const CropRect& rect,
+    std::uint32_t width,
+    std::uint32_t height
+) noexcept {
+    const std::int64_t left = std::max<std::int64_t>(0, rect.x);
+    const std::int64_t top = std::max<std::int64_t>(0, rect.y);
+    const std::int64_t right = std::min<std::int64_t>(
+        rect.right(),
+        static_cast<std::int64_t>(width)
+    );
+    const std::int64_t bottom = std::min<std::int64_t>(
+        rect.bottom(),
+        static_cast<std::int64_t>(height)
+    );
+
+    if (right <= left || bottom <= top) {
+        return CropRect{};
+    }
+
+    return CropRect{
+        static_cast<std::int32_t>(left),
+        static_cast<std::int32_t>(top),
+        static_cast<std::uint32_t>(right - left),
+        static_cast<std::uint32_t>(bottom - top)
+    };
+}
+
+CropRect cropRectFromPoints(
+    double x0,
+    double y0,
+    double x1,
+    double y1,
+    std::uint32_t documentWidth,
+    std::uint32_t documentHeight
+) noexcept {
+    if (!std::isfinite(x0) || !std::isfinite(y0) ||
+        !std::isfinite(x1) || !std::isfinite(y1)) {
+        return CropRect{};
+    }
+
+    const double maxX = static_cast<double>(documentWidth);
+    const double maxY = static_cast<double>(documentHeight);
+
+    const double left = std::clamp(std::min(x0, x1), 0.0, maxX);
+    const double right = std::clamp(std::max(x0, x1), 0.0, maxX);
+    const double top = std::clamp(std::min(y0, y1), 0.0, maxY);
+    const double bottom = std::clamp(std::max(y0, y1), 0.0, maxY);
+
+    const auto pixelLeft = static_cast<std::int64_t>(std::floor(left));
+    const auto pixelTop = static_cast<std::int64_t>(std::floor(top));
+    const auto pixelRight = static_cast<std::int64_t>(std::ceil(right));
+    const auto pixelBottom = static_cast<std::int64_t>(std::ceil(bottom));
+
+    if (pixelRight <= pixelLeft || pixelBottom <= pixelTop) {
+        return CropRect{};
+    }
+
+    return CropRect{
+        static_cast<std::int32_t>(pixelLeft),
+        static_cast<std::int32_t>(pixelTop),
+        static_cast<std::uint32_t>(pixelRight - pixelLeft),
+        static_cast<std::uint32_t>(pixelBottom - pixelTop)
+    };
+}
+
+ImageBuffer cropImage(
+    const ImageBuffer& source,
+    std::int32_t x,
+    std::int32_t y,
+    std::uint32_t width,
+    std::uint32_t height
+) {
+    if (width == 0 || height == 0) {
+        throw std::invalid_argument("Crop dimensions must be greater than zero.");
+    }
+
+    ImageBuffer result(width, height);
+    for (std::uint32_t destY = 0; destY < height; ++destY) {
+        const std::int64_t sourceY =
+            static_cast<std::int64_t>(y) + destY;
+        if (sourceY < 0 ||
+            sourceY >= static_cast<std::int64_t>(source.height())) {
+            continue;
+        }
+        for (std::uint32_t destX = 0; destX < width; ++destX) {
+            const std::int64_t sourceX =
+                static_cast<std::int64_t>(x) + destX;
+            if (sourceX < 0 ||
+                sourceX >= static_cast<std::int64_t>(source.width())) {
+                continue;
+            }
+            result.setPixel(
+                destX,
+                destY,
+                source.getPixel(
+                    static_cast<std::uint32_t>(sourceX),
+                    static_cast<std::uint32_t>(sourceY)
+                )
+            );
+        }
+    }
+    return result;
+}
+
+ImageBuffer scaleImage(
+    const ImageBuffer& source,
+    std::uint32_t width,
+    std::uint32_t height
+) {
+    if (!isValidCanvasSize(width, height)) {
+        throw std::invalid_argument(
+            "Resampled image dimensions are outside the supported range."
+        );
+    }
+
+    if (width == source.width() && height == source.height()) {
+        return source;
+    }
+
+    ImageBuffer result(width, height);
+    const double scaleX =
+        static_cast<double>(source.width()) / static_cast<double>(width);
+    const double scaleY =
+        static_cast<double>(source.height()) / static_cast<double>(height);
+
+    for (std::uint32_t y = 0; y < height; ++y) {
+        const double sourceY =
+            (static_cast<double>(y) + 0.5) * scaleY - 0.5;
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const double sourceX =
+                (static_cast<double>(x) + 0.5) * scaleX - 0.5;
+            result.setPixel(
+                x,
+                y,
+                unpremultiply(samplePremultiplied(source, sourceX, sourceY))
+            );
+        }
+    }
+    return result;
+}
+
+ImageBuffer rotateImage90(
+    const ImageBuffer& source,
+    bool clockwise
+) {
+    const std::uint32_t sourceWidth = source.width();
+    const std::uint32_t sourceHeight = source.height();
+    ImageBuffer result(sourceHeight, sourceWidth);
+
+    for (std::uint32_t y = 0; y < sourceHeight; ++y) {
+        for (std::uint32_t x = 0; x < sourceWidth; ++x) {
+            if (clockwise) {
+                result.setPixel(
+                    sourceHeight - 1 - y,
+                    x,
+                    source.getPixel(x, y)
+                );
+            } else {
+                result.setPixel(
+                    y,
+                    sourceWidth - 1 - x,
+                    source.getPixel(x, y)
+                );
+            }
+        }
+    }
+    return result;
+}
+
+ImageBuffer rotateImage180(const ImageBuffer& source) {
+    const std::uint32_t width = source.width();
+    const std::uint32_t height = source.height();
+    ImageBuffer result(width, height);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            result.setPixel(
+                width - 1 - x,
+                height - 1 - y,
+                source.getPixel(x, y)
+            );
+        }
+    }
+    return result;
+}
+
+ImageBuffer flipImage(const ImageBuffer& source, bool horizontal) {
+    const std::uint32_t width = source.width();
+    const std::uint32_t height = source.height();
+    ImageBuffer result(width, height);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const std::uint32_t destX = horizontal ? width - 1 - x : x;
+            const std::uint32_t destY = horizontal ? y : height - 1 - y;
+            result.setPixel(destX, destY, source.getPixel(x, y));
+        }
+    }
+    return result;
+}
+
+ImageBuffer rotateImage(const ImageBuffer& source, double degrees) {
+    if (!std::isfinite(degrees)) {
+        throw std::invalid_argument("Rotation angle must be finite.");
+    }
+
+    double normalized = std::fmod(degrees, 360.0);
+    if (normalized < 0.0) {
+        normalized += 360.0;
+    }
+
+    int quarterTurns = 0;
+    if (nearlyQuarterTurn(normalized, quarterTurns)) {
+        switch (quarterTurns) {
+        case 0:
+            return source;
+        case 1:
+            return rotateImage90(source, true);
+        case 2:
+            return rotateImage180(source);
+        case 3:
+            return rotateImage90(source, false);
+        default:
+            break;
+        }
+    }
+
+    const double radians = normalized * pi / 180.0;
+    const double cosine = std::cos(radians);
+    const double sine = std::sin(radians);
+    const double sourceWidth = static_cast<double>(source.width());
+    const double sourceHeight = static_cast<double>(source.height());
+
+    const double outputWidthDouble =
+        std::abs(sourceWidth * cosine) + std::abs(sourceHeight * sine);
+    const double outputHeightDouble =
+        std::abs(sourceWidth * sine) + std::abs(sourceHeight * cosine);
+
+    const auto outputWidth = checkedDimension(
+        static_cast<std::int64_t>(std::ceil(outputWidthDouble - 1.0e-9))
+    );
+    const auto outputHeight = checkedDimension(
+        static_cast<std::int64_t>(std::ceil(outputHeightDouble - 1.0e-9))
+    );
+    if (!isValidCanvasSize(outputWidth, outputHeight)) {
+        throw std::invalid_argument(
+            "Rotated image dimensions are outside the supported range."
+        );
+    }
+
+    ImageBuffer result(outputWidth, outputHeight);
+    const double outputCentreX = static_cast<double>(outputWidth) * 0.5;
+    const double outputCentreY = static_cast<double>(outputHeight) * 0.5;
+    const double sourceCentreX = sourceWidth * 0.5;
+    const double sourceCentreY = sourceHeight * 0.5;
+
+    for (std::uint32_t y = 0; y < outputHeight; ++y) {
+        for (std::uint32_t x = 0; x < outputWidth; ++x) {
+            const double offsetX =
+                (static_cast<double>(x) + 0.5) - outputCentreX;
+            const double offsetY =
+                (static_cast<double>(y) + 0.5) - outputCentreY;
+
+            // Inverse rotation from destination to source (clockwise angle).
+            const double sourceX =
+                sourceCentreX + offsetX * cosine + offsetY * sine;
+            const double sourceY =
+                sourceCentreY - offsetX * sine + offsetY * cosine;
+
+            result.setPixel(
+                x,
+                y,
+                unpremultiply(
+                    samplePremultiplied(source, sourceX - 0.5, sourceY - 0.5)
+                )
+            );
+        }
+    }
+    return result;
+}
+
+void cropDocument(Document& document, const CropRect& rect) {
+    const CropRect crop = clipCropRect(rect, document.width(), document.height());
+    if (crop.isEmpty()) {
+        throw std::invalid_argument("Crop rectangle is empty or invalid.");
+    }
+
+    const std::vector<LayerId> ids = layerIds(document);
+    for (const LayerId id : ids) {
+        Layer* layer = document.findLayer(id);
+        if (layer == nullptr) {
+            continue;
+        }
+
+        const std::int64_t layerRight =
+            static_cast<std::int64_t>(layer->x()) + layer->width();
+        const std::int64_t layerBottom =
+            static_cast<std::int64_t>(layer->y()) + layer->height();
+        const std::int64_t intersectionLeft =
+            std::max<std::int64_t>(crop.x, layer->x());
+        const std::int64_t intersectionTop =
+            std::max<std::int64_t>(crop.y, layer->y());
+        const std::int64_t intersectionRight =
+            std::min<std::int64_t>(crop.right(), layerRight);
+        const std::int64_t intersectionBottom =
+            std::min<std::int64_t>(crop.bottom(), layerBottom);
+
+        if (intersectionRight <= intersectionLeft ||
+            intersectionBottom <= intersectionTop) {
+            // Keep the layer (and its metadata) but discard all pixels. A 1x1
+            // transparent buffer is the smallest representable empty layer.
+            layer->buffer() = ImageBuffer(1, 1);
+            layer->setPosition(
+                clampToInt32(
+                    static_cast<std::int64_t>(layer->x()) - crop.x
+                ),
+                clampToInt32(
+                    static_cast<std::int64_t>(layer->y()) - crop.y
+                )
+            );
+            continue;
+        }
+
+        layer->buffer() = cropImage(
+            layer->buffer(),
+            static_cast<std::int32_t>(
+                intersectionLeft - static_cast<std::int64_t>(layer->x())
+            ),
+            static_cast<std::int32_t>(
+                intersectionTop - static_cast<std::int64_t>(layer->y())
+            ),
+            static_cast<std::uint32_t>(
+                intersectionRight - intersectionLeft
+            ),
+            static_cast<std::uint32_t>(
+                intersectionBottom - intersectionTop
+            )
+        );
+        layer->setPosition(
+            clampToInt32(intersectionLeft - crop.x),
+            clampToInt32(intersectionTop - crop.y)
+        );
+    }
+
+    Selection selection = document.selection();
+    selection.translate(-crop.x, -crop.y);
+    document.setCanvasSize(crop.width, crop.height);
+    document.setSelection(selection);
+}
+
+void resizeCanvas(
+    Document& document,
+    std::uint32_t width,
+    std::uint32_t height,
+    Anchor anchor
+) {
+    if (!isValidCanvasSize(width, height)) {
+        throw std::invalid_argument("Canvas dimensions are outside the supported range.");
+    }
+
+    const std::int64_t deltaX = static_cast<std::int64_t>(std::llround(
+        (static_cast<double>(width) -
+         static_cast<double>(document.width())) *
+        anchorFactorX(anchor)
+    ));
+    const std::int64_t deltaY = static_cast<std::int64_t>(std::llround(
+        (static_cast<double>(height) -
+         static_cast<double>(document.height())) *
+        anchorFactorY(anchor)
+    ));
+
+    const std::vector<LayerId> ids = layerIds(document);
+    for (const LayerId id : ids) {
+        Layer* layer = document.findLayer(id);
+        if (layer == nullptr) {
+            continue;
+        }
+        layer->setPosition(
+            clampToInt32(static_cast<std::int64_t>(layer->x()) + deltaX),
+            clampToInt32(static_cast<std::int64_t>(layer->y()) + deltaY)
+        );
+    }
+
+    Selection selection = document.selection();
+    selection.translate(
+        static_cast<double>(deltaX),
+        static_cast<double>(deltaY)
+    );
+    document.setCanvasSize(width, height);
+    document.setSelection(selection);
+}
+
+void resizeDocumentImage(
+    Document& document,
+    std::uint32_t width,
+    std::uint32_t height
+) {
+    if (!isValidCanvasSize(width, height)) {
+        throw std::invalid_argument("Image dimensions are outside the supported range.");
+    }
+    if (width == document.width() && height == document.height()) {
+        return;
+    }
+
+    const double scaleX =
+        static_cast<double>(width) / static_cast<double>(document.width());
+    const double scaleY =
+        static_cast<double>(height) / static_cast<double>(document.height());
+
+    struct PendingLayer {
+        LayerId id;
+        ImageBuffer buffer;
+        std::int32_t x;
+        std::int32_t y;
+    };
+    std::vector<PendingLayer> pending;
+    pending.reserve(document.layerCount());
+
+    const std::vector<LayerId> ids = layerIds(document);
+    for (const LayerId id : ids) {
+        const Layer* layer = document.findLayer(id);
+        if (layer == nullptr) {
+            continue;
+        }
+
+        const std::int64_t oldLeft = layer->x();
+        const std::int64_t oldTop = layer->y();
+        const std::int64_t oldRight = oldLeft + layer->width();
+        const std::int64_t oldBottom = oldTop + layer->height();
+
+        const std::int64_t newLeft = static_cast<std::int64_t>(
+            std::llround(static_cast<double>(oldLeft) * scaleX)
+        );
+        const std::int64_t newTop = static_cast<std::int64_t>(
+            std::llround(static_cast<double>(oldTop) * scaleY)
+        );
+        const std::int64_t newRight = static_cast<std::int64_t>(
+            std::llround(static_cast<double>(oldRight) * scaleX)
+        );
+        const std::int64_t newBottom = static_cast<std::int64_t>(
+            std::llround(static_cast<double>(oldBottom) * scaleY)
+        );
+
+        const auto newWidth = checkedDimension(
+            std::max<std::int64_t>(1, newRight - newLeft)
+        );
+        const auto newHeight = checkedDimension(
+            std::max<std::int64_t>(1, newBottom - newTop)
+        );
+
+        pending.push_back(PendingLayer{
+            id,
+            scaleImage(layer->buffer(), newWidth, newHeight),
+            clampToInt32(newLeft),
+            clampToInt32(newTop)
+        });
+    }
+
+    for (PendingLayer& item : pending) {
+        Layer* layer = document.findLayer(item.id);
+        if (layer == nullptr) {
+            continue;
+        }
+        layer->buffer() = std::move(item.buffer);
+        layer->setPosition(item.x, item.y);
+    }
+
+    Selection selection = document.selection();
+    selection.scale(scaleX, scaleY);
+    document.setCanvasSize(width, height);
+    document.setSelection(selection);
+}
+
+void rotateDocument90(Document& document, bool clockwise) {
+    const std::uint32_t oldWidth = document.width();
+    const std::uint32_t oldHeight = document.height();
+
+    const std::vector<LayerId> ids = layerIds(document);
+    for (const LayerId id : ids) {
+        Layer* layer = document.findLayer(id);
+        if (layer == nullptr) {
+            continue;
+        }
+
+        const std::int64_t x = layer->x();
+        const std::int64_t y = layer->y();
+        const std::int64_t width = layer->width();
+        const std::int64_t height = layer->height();
+
+        const std::int64_t newX = clockwise
+            ? static_cast<std::int64_t>(oldHeight) - (y + height)
+            : y;
+        const std::int64_t newY = clockwise
+            ? x
+            : static_cast<std::int64_t>(oldWidth) - (x + width);
+
+        layer->buffer() = rotateImage90(layer->buffer(), clockwise);
+        layer->setPosition(clampToInt32(newX), clampToInt32(newY));
+    }
+
+    Selection selection = document.selection();
+    if (clockwise) {
+        selection.rotate90Clockwise();
+    } else {
+        selection.rotate90CounterClockwise();
+    }
+    document.setCanvasSize(oldHeight, oldWidth);
+    document.setSelection(selection);
+}
+
+void rotateDocument180(Document& document) {
+    const std::uint32_t width = document.width();
+    const std::uint32_t height = document.height();
+
+    const std::vector<LayerId> ids = layerIds(document);
+    for (const LayerId id : ids) {
+        Layer* layer = document.findLayer(id);
+        if (layer == nullptr) {
+            continue;
+        }
+
+        const std::int64_t newX = static_cast<std::int64_t>(width) -
+                                  (layer->x() + layer->width());
+        const std::int64_t newY = static_cast<std::int64_t>(height) -
+                                  (layer->y() + layer->height());
+
+        layer->buffer() = rotateImage180(layer->buffer());
+        layer->setPosition(clampToInt32(newX), clampToInt32(newY));
+    }
+
+    Selection selection = document.selection();
+    selection.rotate180();
+    document.setCanvasSize(width, height);
+    document.setSelection(selection);
+}
+
+void rotateDocument(
+    Document& document,
+    double degrees,
+    bool expandCanvas
+) {
+    if (!std::isfinite(degrees)) {
+        throw std::invalid_argument("Rotation angle must be finite.");
+    }
+
+    double normalized = std::fmod(degrees, 360.0);
+    if (normalized < 0.0) {
+        normalized += 360.0;
+    }
+
+    int quarterTurns = 0;
+    if (nearlyQuarterTurn(normalized, quarterTurns)) {
+        switch (quarterTurns) {
+        case 0:
+            return;
+        case 1:
+            rotateDocument90(document, true);
+            return;
+        case 2:
+            rotateDocument180(document);
+            return;
+        case 3:
+            rotateDocument90(document, false);
+            return;
+        default:
+            break;
+        }
+    }
+
+    const double radians = normalized * pi / 180.0;
+    const double cosine = std::cos(radians);
+    const double sine = std::sin(radians);
+    const double oldWidth = static_cast<double>(document.width());
+    const double oldHeight = static_cast<double>(document.height());
+
+    std::uint32_t newWidth = document.width();
+    std::uint32_t newHeight = document.height();
+    if (expandCanvas) {
+        newWidth = checkedDimension(static_cast<std::int64_t>(std::ceil(
+            std::abs(oldWidth * cosine) + std::abs(oldHeight * sine) - 1.0e-9
+        )));
+        newHeight = checkedDimension(static_cast<std::int64_t>(std::ceil(
+            std::abs(oldWidth * sine) + std::abs(oldHeight * cosine) - 1.0e-9
+        )));
+        if (!isValidCanvasSize(newWidth, newHeight)) {
+            throw std::invalid_argument(
+                "Rotated canvas dimensions are outside the supported range."
+            );
+        }
+    }
+
+    struct PendingLayer {
+        LayerId id;
+        ImageBuffer buffer;
+        std::int32_t x;
+        std::int32_t y;
+    };
+    std::vector<PendingLayer> pending;
+    pending.reserve(document.layerCount());
+
+    const double oldCentreX = oldWidth * 0.5;
+    const double oldCentreY = oldHeight * 0.5;
+    const double newCentreX = static_cast<double>(newWidth) * 0.5;
+    const double newCentreY = static_cast<double>(newHeight) * 0.5;
+
+    const std::vector<LayerId> ids = layerIds(document);
+    for (const LayerId id : ids) {
+        const Layer* layer = document.findLayer(id);
+        if (layer == nullptr) {
+            continue;
+        }
+
+        const double centreX =
+            static_cast<double>(layer->x()) + layer->width() * 0.5;
+        const double centreY =
+            static_cast<double>(layer->y()) + layer->height() * 0.5;
+        const double offsetX = centreX - oldCentreX;
+        const double offsetY = centreY - oldCentreY;
+        const double rotatedX = offsetX * cosine - offsetY * sine;
+        const double rotatedY = offsetX * sine + offsetY * cosine;
+
+        ImageBuffer rotated = rotateImage(layer->buffer(), normalized);
+        const double newLayerCentreX = newCentreX + rotatedX;
+        const double newLayerCentreY = newCentreY + rotatedY;
+
+        pending.push_back(PendingLayer{
+            id,
+            std::move(rotated),
+            clampToInt32(static_cast<std::int64_t>(std::llround(
+                newLayerCentreX - static_cast<double>(rotated.width()) * 0.5
+            ))),
+            clampToInt32(static_cast<std::int64_t>(std::llround(
+                newLayerCentreY - static_cast<double>(rotated.height()) * 0.5
+            )))
+        });
+    }
+
+    for (PendingLayer& item : pending) {
+        Layer* layer = document.findLayer(item.id);
+        if (layer == nullptr) {
+            continue;
+        }
+        layer->buffer() = std::move(item.buffer);
+        layer->setPosition(item.x, item.y);
+    }
+
+    document.setCanvasSize(newWidth, newHeight);
+    document.setSelection(Selection{});
+}
+
+void flipDocument(Document& document, bool horizontal) {
+    const std::uint32_t width = document.width();
+    const std::uint32_t height = document.height();
+
+    const std::vector<LayerId> ids = layerIds(document);
+    for (const LayerId id : ids) {
+        Layer* layer = document.findLayer(id);
+        if (layer == nullptr) {
+            continue;
+        }
+
+        const std::int64_t newX = horizontal
+            ? static_cast<std::int64_t>(width) -
+              (layer->x() + layer->width())
+            : layer->x();
+        const std::int64_t newY = horizontal
+            ? layer->y()
+            : static_cast<std::int64_t>(height) -
+              (layer->y() + layer->height());
+
+        layer->buffer() = flipImage(layer->buffer(), horizontal);
+        layer->setPosition(clampToInt32(newX), clampToInt32(newY));
+    }
+
+    Selection selection = document.selection();
+    if (horizontal) {
+        selection.flipHorizontal();
+    } else {
+        selection.flipVertical();
+    }
+    document.setCanvasSize(width, height);
+    document.setSelection(selection);
+}
+
+void transformLayer(
+    Document& document,
+    LayerId layerId,
+    LayerTransform transform
+) {
+    Layer* layer = document.findLayer(layerId);
+    if (layer == nullptr) {
+        throw std::invalid_argument("Layer does not exist.");
+    }
+
+    switch (transform) {
+    case LayerTransform::Rotate90Clockwise:
+    case LayerTransform::Rotate90CounterClockwise: {
+        const bool clockwise =
+            transform == LayerTransform::Rotate90Clockwise;
+        const double centreX =
+            static_cast<double>(layer->x()) + layer->width() * 0.5;
+        const double centreY =
+            static_cast<double>(layer->y()) + layer->height() * 0.5;
+        layer->buffer() = rotateImage90(layer->buffer(), clockwise);
+        layer->setPosition(
+            clampToInt32(static_cast<std::int64_t>(std::llround(
+                centreX - static_cast<double>(layer->width()) * 0.5
+            ))),
+            clampToInt32(static_cast<std::int64_t>(std::llround(
+                centreY - static_cast<double>(layer->height()) * 0.5
+            )))
+        );
+        break;
+    }
+    case LayerTransform::Rotate180:
+        layer->buffer() = rotateImage180(layer->buffer());
+        break;
+    case LayerTransform::FlipHorizontal:
+        layer->buffer() = flipImage(layer->buffer(), true);
+        break;
+    case LayerTransform::FlipVertical:
+        layer->buffer() = flipImage(layer->buffer(), false);
+        break;
+    }
+}
+
+void rotateLayer(Document& document, LayerId layerId, double degrees) {
+    Layer* layer = document.findLayer(layerId);
+    if (layer == nullptr) {
+        throw std::invalid_argument("Layer does not exist.");
+    }
+    if (!std::isfinite(degrees)) {
+        throw std::invalid_argument("Rotation angle must be finite.");
+    }
+
+    const double centreX =
+        static_cast<double>(layer->x()) + layer->width() * 0.5;
+    const double centreY =
+        static_cast<double>(layer->y()) + layer->height() * 0.5;
+
+    ImageBuffer rotated = rotateImage(layer->buffer(), degrees);
+    const std::uint32_t newWidth = rotated.width();
+    const std::uint32_t newHeight = rotated.height();
+    layer->buffer() = std::move(rotated);
+    layer->setPosition(
+        clampToInt32(static_cast<std::int64_t>(std::llround(
+            centreX - static_cast<double>(newWidth) * 0.5
+        ))),
+        clampToInt32(static_cast<std::int64_t>(std::llround(
+            centreY - static_cast<double>(newHeight) * 0.5
+        )))
+    );
+}
+
+void scaleLayer(
+    Document& document,
+    LayerId layerId,
+    std::uint32_t width,
+    std::uint32_t height
+) {
+    Layer* layer = document.findLayer(layerId);
+    if (layer == nullptr) {
+        throw std::invalid_argument("Layer does not exist.");
+    }
+    if (!isValidCanvasSize(width, height)) {
+        throw std::invalid_argument("Layer dimensions are outside the supported range.");
+    }
+
+    const double centreX =
+        static_cast<double>(layer->x()) + layer->width() * 0.5;
+    const double centreY =
+        static_cast<double>(layer->y()) + layer->height() * 0.5;
+
+    layer->buffer() = scaleImage(layer->buffer(), width, height);
+    layer->setPosition(
+        clampToInt32(static_cast<std::int64_t>(std::llround(
+            centreX - static_cast<double>(width) * 0.5
+        ))),
+        clampToInt32(static_cast<std::int64_t>(std::llround(
+            centreY - static_cast<double>(height) * 0.5
+        )))
+    );
+}
+
+void translateLayer(
+    Document& document,
+    LayerId layerId,
+    std::int32_t deltaX,
+    std::int32_t deltaY
+) {
+    Layer* layer = document.findLayer(layerId);
+    if (layer == nullptr) {
+        throw std::invalid_argument("Layer does not exist.");
+    }
+    layer->setPosition(
+        clampToInt32(static_cast<std::int64_t>(layer->x()) + deltaX),
+        clampToInt32(static_cast<std::int64_t>(layer->y()) + deltaY)
+    );
+}
+
+DocumentSnapshot captureDocumentSnapshot(const Document& document) {
+    DocumentSnapshot snapshot;
+    snapshot.width = document.width();
+    snapshot.height = document.height();
+    snapshot.solidBackground = document.hasSolidBackground();
+    snapshot.backgroundColor = document.backgroundColor();
+    snapshot.selection = document.selection();
+    snapshot.layers.reserve(document.layerCount());
+    for (const Layer& layer : document.layerStack().layers()) {
+        snapshot.layers.push_back(layer);
+    }
+    return snapshot;
+}
+
+void restoreDocumentSnapshot(
+    Document& document,
+    const DocumentSnapshot& snapshot
+) {
+    while (!document.layerStack().empty()) {
+        const LayerId id = document.layerStack().layers().front().id();
+        document.removeLayer(id);
+    }
+
+    document.setCanvasSize(snapshot.width, snapshot.height);
+    if (snapshot.solidBackground) {
+        document.setSolidBackground(snapshot.backgroundColor);
+    } else {
+        document.setTransparentBackground();
+    }
+
+    for (const Layer& layer : snapshot.layers) {
+        document.addLayer(layer);
+    }
+    document.setSelection(snapshot.selection);
+}
+
+CropCommand::CropCommand(CropRect rect) : rect_(rect) {}
+
+std::string CropCommand::name() const {
+    return "Crop";
+}
+
+bool CropCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) { cropDocument(target, rect_); }
+    );
+}
+
+bool CropCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+CanvasResizeCommand::CanvasResizeCommand(
+    std::uint32_t width,
+    std::uint32_t height,
+    Anchor anchor
+) : width_(width), height_(height), anchor_(anchor) {}
+
+std::string CanvasResizeCommand::name() const {
+    return "CanvasResize";
+}
+
+bool CanvasResizeCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            resizeCanvas(target, width_, height_, anchor_);
+        }
+    );
+}
+
+bool CanvasResizeCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+ImageResizeCommand::ImageResizeCommand(
+    std::uint32_t width,
+    std::uint32_t height
+) : width_(width), height_(height) {}
+
+std::string ImageResizeCommand::name() const {
+    return "ImageResize";
+}
+
+bool ImageResizeCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            resizeDocumentImage(target, width_, height_);
+        }
+    );
+}
+
+bool ImageResizeCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+RotateDocumentCommand::RotateDocumentCommand(DocumentRotation rotation)
+    : rotation_(rotation) {}
+
+std::string RotateDocumentCommand::name() const {
+    return "RotateDocument";
+}
+
+bool RotateDocumentCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            switch (rotation_) {
+            case DocumentRotation::Clockwise90:
+                rotateDocument90(target, true);
+                break;
+            case DocumentRotation::CounterClockwise90:
+                rotateDocument90(target, false);
+                break;
+            case DocumentRotation::Rotate180:
+                rotateDocument180(target);
+                break;
+            }
+        }
+    );
+}
+
+bool RotateDocumentCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+ArbitraryRotateDocumentCommand::ArbitraryRotateDocumentCommand(double degrees)
+    : degrees_(degrees) {}
+
+std::string ArbitraryRotateDocumentCommand::name() const {
+    return "RotateCanvas";
+}
+
+bool ArbitraryRotateDocumentCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            rotateDocument(target, degrees_, true);
+        }
+    );
+}
+
+bool ArbitraryRotateDocumentCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+FlipDocumentCommand::FlipDocumentCommand(bool horizontal)
+    : horizontal_(horizontal) {}
+
+std::string FlipDocumentCommand::name() const {
+    return "FlipDocument";
+}
+
+bool FlipDocumentCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) { flipDocument(target, horizontal_); }
+    );
+}
+
+bool FlipDocumentCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+TransformLayerCommand::TransformLayerCommand(
+    LayerId layerId,
+    LayerTransform transform
+) : layerId_(layerId), transform_(transform) {}
+
+std::string TransformLayerCommand::name() const {
+    return "TransformLayer";
+}
+
+bool TransformLayerCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            transformLayer(target, layerId_, transform_);
+        }
+    );
+}
+
+bool TransformLayerCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+ArbitraryRotateLayerCommand::ArbitraryRotateLayerCommand(
+    LayerId layerId,
+    double degrees
+) : layerId_(layerId), degrees_(degrees) {}
+
+std::string ArbitraryRotateLayerCommand::name() const {
+    return "RotateLayer";
+}
+
+bool ArbitraryRotateLayerCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            rotateLayer(target, layerId_, degrees_);
+        }
+    );
+}
+
+bool ArbitraryRotateLayerCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+ScaleLayerCommand::ScaleLayerCommand(
+    LayerId layerId,
+    std::uint32_t width,
+    std::uint32_t height
+) : layerId_(layerId), width_(width), height_(height) {}
+
+std::string ScaleLayerCommand::name() const {
+    return "ScaleLayer";
+}
+
+bool ScaleLayerCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            scaleLayer(target, layerId_, width_, height_);
+        }
+    );
+}
+
+bool ScaleLayerCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+TranslateLayerCommand::TranslateLayerCommand(
+    LayerId layerId,
+    std::int32_t deltaX,
+    std::int32_t deltaY
+) : layerId_(layerId), deltaX_(deltaX), deltaY_(deltaY) {}
+
+std::string TranslateLayerCommand::name() const {
+    return "TranslateLayer";
+}
+
+bool TranslateLayerCommand::execute(Document& document) {
+    return applyDocumentOperation(
+        document,
+        before_,
+        captured_,
+        [this](Document& target) {
+            translateLayer(target, layerId_, deltaX_, deltaY_);
+        }
+    );
+}
+
+bool TranslateLayerCommand::undo(Document& document) {
+    if (!captured_) {
+        return false;
+    }
+    try {
+        restoreDocumentSnapshot(document, before_);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace glyma::core

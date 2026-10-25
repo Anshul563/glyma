@@ -18,6 +18,7 @@ class QWheelEvent;
 namespace glyma::app {
 
 class CheckerboardItem;
+class CropItem;
 class SelectionItem;
 
 // Graphics-view based canvas with checkerboard transparency, zoom, panning,
@@ -32,6 +33,7 @@ public:
         SelectRectangle,
         SelectEllipse,
         BucketFill,
+        Crop,
     };
 
     static constexpr double minZoom = 0.05;
@@ -71,6 +73,14 @@ public:
     // from the image pixels.
     void setSelection(const core::Selection& selection);
 
+    // Crop overlay in document coordinates. A pending crop is retained until
+    // clearCrop() is called (Apply/Cancel are owned by the window). Setting an
+    // empty rectangle clears the overlay.
+    void setCropRect(const QRectF& rect);
+    void clearCrop();
+    [[nodiscard]] QRectF cropRect() const noexcept;
+    [[nodiscard]] bool hasCrop() const noexcept;
+
 signals:
     void strokeStarted(const QPointF& documentPosition);
     void strokeMoved(const QPointF& documentPosition);
@@ -83,6 +93,11 @@ signals:
     void selectionDragCancelled();
     // Emitted when the bucket fill tool is clicked at a document position.
     void bucketFillRequested(const QPointF& documentPosition);
+    // Emitted whenever the crop rectangle is created or adjusted. An empty
+    // rectangle means there is no usable crop area.
+    void cropRectChanged(const QRectF& documentRect);
+    void cropApplyRequested();
+    void cropCancelRequested();
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -94,13 +109,31 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
+    enum class CropHandle {
+        None,
+        New,
+        Move,
+        Left,
+        Right,
+        Top,
+        Bottom,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+    };
+
     void applyZoom(double zoom, bool fitMode);
     void updateSceneBounds();
+    [[nodiscard]] CropHandle cropHandleAt(const QPointF& point) const;
+    [[nodiscard]] QRectF clampCropRect(const QRectF& rect) const;
+    void updateCropItem();
 
     QGraphicsScene* scene_{nullptr};
     CheckerboardItem* checkerboard_{nullptr};
     QGraphicsPixmapItem* pixmapItem_{nullptr};
     SelectionItem* selectionItem_{nullptr};
+    CropItem* cropItem_{nullptr};
     QSize imageSize_;
     double zoom_{1.0};
     bool fitMode_{false};
@@ -108,6 +141,11 @@ private:
     bool drawing_{false};
     bool selecting_{false};
     bool panning_{false};
+    bool cropDragging_{false};
+    CropHandle cropHandle_{CropHandle::None};
+    QPointF cropStartPoint_;
+    QRectF cropStartRect_;
+    bool hasCrop_{false};
     QPointF selectionStart_;
     QPoint lastPanPoint_;
 };

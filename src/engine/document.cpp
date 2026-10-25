@@ -72,6 +72,24 @@ std::uint64_t Document::pixelCount() const noexcept {
     return static_cast<std::uint64_t>(width_) * static_cast<std::uint64_t>(height_);
 }
 
+void Document::setCanvasSize(std::uint32_t width, std::uint32_t height) {
+    if (width == 0 || height == 0) {
+        throw std::invalid_argument(
+            "Document dimensions must be greater than zero."
+        );
+    }
+    const std::uint64_t pixels =
+        static_cast<std::uint64_t>(width) *
+        static_cast<std::uint64_t>(height);
+    if (pixels > maxPixelCount) {
+        throw std::invalid_argument("Document dimensions exceed resource limits.");
+    }
+
+    width_ = width;
+    height_ = height;
+    selection_.setDocumentSize(width_, height_);
+}
+
 bool Document::hasSolidBackground() const noexcept {
     return !transparentBackground_;
 }

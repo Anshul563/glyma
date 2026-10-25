@@ -79,6 +79,9 @@ remains Qt-independent; the application layer owns the active `Document`, its
   foreground color.
 - Image adjustments (exposure, brightness, contrast, saturation, grayscale,
   gaussian blur, and sharpen) in a live-preview dialog under the Image menu.
+- Canvas crop, canvas/image resize, 90/180 and arbitrary rotation, and
+  horizontal/vertical flipping under the Image menu, plus per-layer rotate,
+  flip, scale, and move commands under the Layer menu.
 - Undo/redo for brush/eraser strokes, selection changes, bucket fills,
   image adjustments, and layer add/remove/reorder/rename, visibility, and
   opacity changes through the engine command history.
@@ -159,6 +162,31 @@ Qt-independent. The dialog lives in
   A committed adjustment is one command-history entry that stores the smaller of
   a sparse pixel-diff or a before/after buffer snapshot, so undo and redo are
   exact without always paying for a full-document copy.
+
+## Canvas and Layer Transforms
+
+The transform engine lives in `include/glyma/core/transform.hpp` and
+`src/engine/transform.cpp`. It is Qt-independent, and every whole-document or
+single-layer operation has a matching undoable command.
+
+- `Crop` (`C`) activates a draggable crop overlay with a rule-of-thirds grid and
+  eight handles. Drag inside the canvas to draw a region, adjust it, then apply
+  with the `Apply Crop` toolbar button, `Ctrl+Return`, or Enter. Escape or a
+  right-click cancels the pending crop.
+- `Canvas Size...` (`Ctrl+Alt+C`) changes the canvas without resampling layers,
+  repositioning existing content according to a nine-way anchor.
+- `Image Size...` (`Ctrl+Alt+I`) resamples the canvas and every layer, scaling
+  offsets and sizes by the same factors (bilinear, premultiplied alpha).
+- `Rotate Canvas 90° Clockwise/Counterclockwise`, `Rotate Canvas 180°`, and
+  `Rotate Canvas by Angle...` rotate the whole document; non-quarter-turn
+  rotations expand the canvas to the axis-aligned bounding box and clear the
+  selection.
+- `Flip Canvas Horizontal/Vertical` mirror the canvas content.
+- Per-layer `Rotate`, `Flip`, `Scale...`, and `Move...` commands transform only
+  the selected layer, keeping the layer centre fixed for rotations.
+- Selection geometry follows document crops, resizes, rotations, and flips.
+- Each transform is a single command-history entry; undo and redo restore the
+  exact prior state (dimensions, layer geometry and pixels, and selection).
 
 ## PNG Import/Export
 
@@ -248,7 +276,7 @@ Undo/redo history is session-only and is not serialized.
 ## Known limitations
 
 - No JPEG/WebP/SVG/PSD support.
-- No transformations or GPU rendering.
+- No GPU rendering.
 - Adjustments are basic and destructive (pixels are baked on commit); there are
   no curves, levels, or per-channel controls.
 - No textured brushes, pressure sensitivity, brush dynamics, or advanced brush

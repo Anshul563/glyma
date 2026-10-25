@@ -14,6 +14,10 @@ void Selection::setDocumentSize(
     clipToDocument(
         left_, top_, right_, bottom_, width, height
     );
+    if (type_ != Type::None && !inverted_ &&
+        (right_ <= left_ || bottom_ <= top_)) {
+        clear();
+    }
 }
 
 std::uint32_t Selection::documentWidth() const noexcept {
@@ -124,6 +128,113 @@ void Selection::setEllipse(
 
 void Selection::invert() noexcept {
     inverted_ = !inverted_;
+}
+
+void Selection::translate(double dx, double dy) noexcept {
+    if (type_ == Type::None) {
+        return;
+    }
+    if (!std::isfinite(dx) || !std::isfinite(dy)) {
+        return;
+    }
+    left_ += dx;
+    right_ += dx;
+    top_ += dy;
+    bottom_ += dy;
+    clipToDocument(left_, top_, right_, bottom_, docWidth_, docHeight_);
+}
+
+void Selection::scale(double scaleX, double scaleY) noexcept {
+    if (!std::isfinite(scaleX) || !std::isfinite(scaleY) ||
+        scaleX <= 0.0 || scaleY <= 0.0) {
+        return;
+    }
+
+    const auto scaledWidth = static_cast<std::uint32_t>(std::max(
+        1.0,
+        std::round(static_cast<double>(docWidth_) * scaleX)
+    ));
+    const auto scaledHeight = static_cast<std::uint32_t>(std::max(
+        1.0,
+        std::round(static_cast<double>(docHeight_) * scaleY)
+    ));
+
+    if (type_ != Type::None) {
+        left_ *= scaleX;
+        right_ *= scaleX;
+        top_ *= scaleY;
+        bottom_ *= scaleY;
+    }
+    docWidth_ = scaledWidth;
+    docHeight_ = scaledHeight;
+    clipToDocument(left_, top_, right_, bottom_, docWidth_, docHeight_);
+}
+
+void Selection::rotate90Clockwise() noexcept {
+    if (type_ != Type::None) {
+        const double oldLeft = left_;
+        const double oldTop = top_;
+        const double oldRight = right_;
+        const double oldBottom = bottom_;
+        left_ = static_cast<double>(docHeight_) - oldBottom;
+        right_ = static_cast<double>(docHeight_) - oldTop;
+        top_ = oldLeft;
+        bottom_ = oldRight;
+    }
+    std::swap(docWidth_, docHeight_);
+    clipToDocument(left_, top_, right_, bottom_, docWidth_, docHeight_);
+}
+
+void Selection::rotate90CounterClockwise() noexcept {
+    if (type_ != Type::None) {
+        const double oldLeft = left_;
+        const double oldTop = top_;
+        const double oldRight = right_;
+        const double oldBottom = bottom_;
+        const double oldWidth = static_cast<double>(docWidth_);
+        left_ = oldTop;
+        right_ = oldBottom;
+        top_ = oldWidth - oldRight;
+        bottom_ = oldWidth - oldLeft;
+    }
+    std::swap(docWidth_, docHeight_);
+    clipToDocument(left_, top_, right_, bottom_, docWidth_, docHeight_);
+}
+
+void Selection::rotate180() noexcept {
+    if (type_ != Type::None) {
+        const double oldLeft = left_;
+        const double oldTop = top_;
+        const double oldRight = right_;
+        const double oldBottom = bottom_;
+        left_ = static_cast<double>(docWidth_) - oldRight;
+        right_ = static_cast<double>(docWidth_) - oldLeft;
+        top_ = static_cast<double>(docHeight_) - oldBottom;
+        bottom_ = static_cast<double>(docHeight_) - oldTop;
+    }
+    clipToDocument(left_, top_, right_, bottom_, docWidth_, docHeight_);
+}
+
+void Selection::flipHorizontal() noexcept {
+    if (type_ == Type::None) {
+        return;
+    }
+    const double oldLeft = left_;
+    const double oldRight = right_;
+    left_ = static_cast<double>(docWidth_) - oldRight;
+    right_ = static_cast<double>(docWidth_) - oldLeft;
+    clipToDocument(left_, top_, right_, bottom_, docWidth_, docHeight_);
+}
+
+void Selection::flipVertical() noexcept {
+    if (type_ == Type::None) {
+        return;
+    }
+    const double oldTop = top_;
+    const double oldBottom = bottom_;
+    top_ = static_cast<double>(docHeight_) - oldBottom;
+    bottom_ = static_cast<double>(docHeight_) - oldTop;
+    clipToDocument(left_, top_, right_, bottom_, docWidth_, docHeight_);
 }
 
 bool Selection::contains(double x, double y) const noexcept {

@@ -58,6 +58,20 @@ private:
     void onAdjustments();
     void onAbout();
 
+    void onCanvasSize();
+    void onImageSize();
+    void onArbitraryRotateCanvas();
+    void onRotateCanvas90(bool clockwise);
+    void onRotateCanvas180();
+    void onFlipCanvas(bool horizontal);
+    void onCropApply();
+    void onCropCancel();
+    void onScaleLayer();
+    void onRotateLayer(core::LayerTransform transform);
+    void onArbitraryRotateLayer();
+    void onFlipLayer(bool horizontal);
+    void onTranslateLayer();
+
     [[nodiscard]] bool prepareForDestructiveAction();
     [[nodiscard]] bool saveCurrentDocument();
     [[nodiscard]] bool saveDocumentAs();
@@ -84,6 +98,26 @@ private:
     QAction* resetZoomAction_{nullptr};
     QAction* imageAdjustmentsAction_{nullptr};
     QAction* aboutAction_{nullptr};
+
+    QAction* cropAction_{nullptr};
+    QAction* cropApplyAction_{nullptr};
+    QAction* cropCancelAction_{nullptr};
+    QAction* canvasSizeAction_{nullptr};
+    QAction* imageSizeAction_{nullptr};
+    QAction* rotateCanvasCWAction_{nullptr};
+    QAction* rotateCanvasCCWAction_{nullptr};
+    QAction* rotateCanvas180Action_{nullptr};
+    QAction* rotateCanvasFreeAction_{nullptr};
+    QAction* flipCanvasHorizontalAction_{nullptr};
+    QAction* flipCanvasVerticalAction_{nullptr};
+    QAction* rotateLayerCWAction_{nullptr};
+    QAction* rotateLayerCCWAction_{nullptr};
+    QAction* rotateLayer180Action_{nullptr};
+    QAction* rotateLayerFreeAction_{nullptr};
+    QAction* flipLayerHorizontalAction_{nullptr};
+    QAction* flipLayerVerticalAction_{nullptr};
+    QAction* scaleLayerAction_{nullptr};
+    QAction* translateLayerAction_{nullptr};
 
     QActionGroup* toolGroup_{nullptr};
     QAction* brushToolAction_{nullptr};

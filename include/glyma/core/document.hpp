@@ -42,6 +42,12 @@ public:
     [[nodiscard]] std::uint32_t height() const noexcept;
     [[nodiscard]] std::uint64_t pixelCount() const noexcept;
 
+    // Replace the canvas dimensions. Layer buffers are not resampled or
+    // repositioned; callers that need those effects must use the transform
+    // helpers in transform.hpp. Selection geometry is re-clipped to the new
+    // bounds. Throws std::invalid_argument for zero or over-limit sizes.
+    void setCanvasSize(std::uint32_t width, std::uint32_t height);
+
     [[nodiscard]] bool hasSolidBackground() const noexcept;
     [[nodiscard]] Pixel backgroundColor() const noexcept;
     // Set a solid background color (alpha is respected by renderer).

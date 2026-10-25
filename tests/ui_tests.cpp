@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QListWidget>
+#include <QMetaObject>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -26,6 +27,7 @@
 #include "glyma/core/fill.hpp"
 #include "glyma/core/image_buffer.hpp"
 #include "glyma/core/selection.hpp"
+#include "glyma/core/transform.hpp"
 
 namespace {
 
@@ -784,6 +786,122 @@ void testControllerAdjustmentCancelRestores() {
     assert(!controller.canUndo());
 }
 
+void testControllerTransformIntegration() {
+    AppController controller;
+    assert(controller.newDocument(QStringLiteral("Transform"), 8, 6));
+    const LayerId id = controller.selectedLayerId();
+    Layer* layer = controller.document().findLayer(id);
+    assert(layer != nullptr);
+    layer->buffer().clear(Pixel{30, 60, 90, 255});
+
+    // Rotating the canvas 90 degrees clockwise swaps its dimensions and is
+    // recorded as a single undoable command.
+    assert(controller.rotateCanvas90(true));
+    assert(controller.document().width() == 6);
+    assert(controller.document().height() == 8);
+    assert(controller.undo());
+    assert(controller.document().width() == 8);
+    assert(controller.document().height() == 6);
+    assert(controller.redo());
+    assert(controller.document().width() == 6);
+
+    assert(controller.flipCanvas(true));
+    assert(controller.canUndo());
+
+    assert(controller.resizeCanvas(12, 10, glyma::core::Anchor::Center));
+    assert(controller.document().width() == 12);
+    assert(controller.document().height() == 10);
+
+    assert(controller.resizeImage(6, 5));
+    assert(controller.document().width() == 6);
+    assert(controller.document().height() == 5);
+
+    assert(controller.crop(glyma::core::CropRect{1, 1, 4, 3}));
+    assert(controller.document().width() == 4);
+    assert(controller.document().height() == 3);
+
+    // Layer-level transforms stay undoable.
+    assert(controller.translateLayer(id, 2, 1));
+    assert(controller.scaleLayer(id, 3, 2));
+    assert(controller.transformLayer(
+        id, glyma::core::LayerTransform::Rotate90Clockwise));
+    assert(controller.rotateLayer(id, 45.0));
+    assert(controller.document().findLayer(id) != nullptr);
+
+    // Invalid requests are rejected without adding history entries.
+    assert(!controller.crop(glyma::core::CropRect{0, 0, 0, 0}));
+    assert(!controller.translateLayer(id, 0, 0));
+    assert(!controller.rotateCanvas(0.0));
+    const std::uint32_t width = controller.document().width();
+    const std::uint32_t height = controller.document().height();
+    assert(!controller.resizeCanvas(
+        width, height, glyma::core::Anchor::Center));
+    assert(!controller.transformLayer(999999, glyma::core::LayerTransform::Rotate180));
+    assert(controller.document().width() == width);
+    assert(controller.document().height() == height);
+}
+
+void testMainWindowTransformActions() {
+    MainWindow window;
+
+    const char* names[] = {
+        "actionImageCrop",
+        "actionImageCropApply",
+        "actionImageCropCancel",
+        "actionCanvasSize",
+        "actionImageResize",
+        "actionImageRotateCW",
+        "actionImageRotateCCW",
+        "actionImageRotate180",
+        "actionImageRotateFree",
+        "actionImageFlipHorizontal",
+        "actionImageFlipVertical",
+        "actionLayerRotateCW",
+        "actionLayerRotateCCW",
+        "actionLayerRotate180",
+        "actionLayerRotateFree",
+        "actionLayerFlipHorizontal",
+        "actionLayerFlipVertical",
+        "actionLayerScale",
+        "actionLayerMove",
+    };
+    for (const char* name : names) {
+        assert(window.findChild<QAction*>(QString::fromLatin1(name)) != nullptr);
+    }
+
+    auto* crop = window.findChild<QAction*>(QStringLiteral("actionImageCrop"));
+    assert(crop->isCheckable());
+
+    AppController& controller = window.controller();
+    const std::uint32_t width = controller.document().width();
+    const std::uint32_t height = controller.document().height();
+
+    auto* rotateCW =
+        window.findChild<QAction*>(QStringLiteral("actionImageRotateCW"));
+    rotateCW->trigger();
+    assert(controller.document().width() == height);
+    assert(controller.document().height() == width);
+    assert(controller.canUndo());
+
+    auto* flip =
+        window.findChild<QAction*>(QStringLiteral("actionImageFlipVertical"));
+    flip->trigger();
+    assert(controller.canUndo());
+
+    auto* canvas = window.findChild<CanvasView*>(QStringLiteral("canvasView"));
+    assert(canvas != nullptr);
+    canvas->setCropRect(QRectF(1.0, 1.0, 4.0, 4.0));
+    assert(canvas->hasCrop());
+
+    // The Apply action is wired to the canvas request signal; emitting the
+    // signal exercises the same path as clicking the toolbar button.
+    assert(QMetaObject::invokeMethod(
+        canvas, "cropApplyRequested", Qt::DirectConnection));
+    assert(!canvas->hasCrop());
+    assert(controller.document().width() == 4);
+    assert(controller.document().height() == 4);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -816,6 +934,8 @@ int main(int argc, char* argv[]) {
     testAdjustmentDialogControls();
     testControllerAdjustmentIntegration();
     testControllerAdjustmentCancelRestores();
+    testControllerTransformIntegration();
+    testMainWindowTransformActions();
     testControllerFailurePaths();
     testControllerFileOperations();
 

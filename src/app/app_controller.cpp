@@ -694,6 +694,178 @@ bool AppController::redo() {
     return true;
 }
 
+bool AppController::commitTransform(core::CommandPtr command) {
+    if (brushStroke_) {
+        (void)endBrushStroke();
+    }
+    cancelSelection();
+    if (!command) {
+        return false;
+    }
+    if (!history_.execute(std::move(command), *document_)) {
+        return false;
+    }
+    ensureSelection();
+    emit pixelSelectionChanged();
+    emitDocumentState(true);
+    return true;
+}
+
+bool AppController::crop(const core::CropRect& rect) {
+    const core::CropRect clipped = core::clipCropRect(
+        rect, document_->width(), document_->height()
+    );
+    if (clipped.isEmpty()) {
+        emit errorOccurred(tr("Select a non-empty crop area inside the canvas."));
+        return false;
+    }
+    if (clipped.x == 0 && clipped.y == 0 &&
+        clipped.width == document_->width() &&
+        clipped.height == document_->height()) {
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::CropCommand>(clipped)
+    );
+}
+
+bool AppController::resizeCanvas(
+    std::uint32_t width,
+    std::uint32_t height,
+    core::Anchor anchor
+) {
+    if (!core::isValidCanvasSize(width, height)) {
+        emit errorOccurred(tr("Invalid canvas size."));
+        return false;
+    }
+    if (width == document_->width() && height == document_->height()) {
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::CanvasResizeCommand>(width, height, anchor)
+    );
+}
+
+bool AppController::resizeImage(
+    std::uint32_t width,
+    std::uint32_t height
+) {
+    if (!core::isValidCanvasSize(width, height)) {
+        emit errorOccurred(tr("Invalid image size."));
+        return false;
+    }
+    if (width == document_->width() && height == document_->height()) {
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::ImageResizeCommand>(width, height)
+    );
+}
+
+bool AppController::rotateCanvas(core::DocumentRotation rotation) {
+    return commitTransform(
+        std::make_unique<core::RotateDocumentCommand>(rotation)
+    );
+}
+
+bool AppController::rotateCanvas(double degrees) {
+    if (!std::isfinite(degrees)) {
+        emit errorOccurred(tr("Rotation angle must be a finite number."));
+        return false;
+    }
+    const double normalized = std::fmod(degrees, 360.0);
+    if (std::abs(normalized) < 1.0e-9 ||
+        std::abs(std::abs(normalized) - 360.0) < 1.0e-9) {
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::ArbitraryRotateDocumentCommand>(degrees)
+    );
+}
+
+bool AppController::rotateCanvas90(bool clockwise) {
+    return rotateCanvas(
+        clockwise ? core::DocumentRotation::Clockwise90
+                  : core::DocumentRotation::CounterClockwise90
+    );
+}
+
+bool AppController::rotateCanvas180() {
+    return rotateCanvas(core::DocumentRotation::Rotate180);
+}
+
+bool AppController::flipCanvas(bool horizontal) {
+    return commitTransform(
+        std::make_unique<core::FlipDocumentCommand>(horizontal)
+    );
+}
+
+bool AppController::transformLayer(
+    core::LayerId id,
+    core::LayerTransform transform
+) {
+    if (document_->findLayer(id) == nullptr) {
+        emit errorOccurred(tr("Select a layer to transform."));
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::TransformLayerCommand>(id, transform)
+    );
+}
+
+bool AppController::rotateLayer(core::LayerId id, double degrees) {
+    if (document_->findLayer(id) == nullptr) {
+        emit errorOccurred(tr("Select a layer to rotate."));
+        return false;
+    }
+    if (!std::isfinite(degrees)) {
+        emit errorOccurred(tr("Rotation angle must be a finite number."));
+        return false;
+    }
+    const double normalized = std::fmod(degrees, 360.0);
+    if (std::abs(normalized) < 1.0e-9) {
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::ArbitraryRotateLayerCommand>(id, degrees)
+    );
+}
+
+bool AppController::scaleLayer(
+    core::LayerId id,
+    std::uint32_t width,
+    std::uint32_t height
+) {
+    if (document_->findLayer(id) == nullptr) {
+        emit errorOccurred(tr("Select a layer to scale."));
+        return false;
+    }
+    if (!core::isValidCanvasSize(width, height)) {
+        emit errorOccurred(tr("Invalid layer size."));
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::ScaleLayerCommand>(id, width, height)
+    );
+}
+
+bool AppController::translateLayer(
+    core::LayerId id,
+    std::int32_t deltaX,
+    std::int32_t deltaY
+) {
+    if (document_->findLayer(id) == nullptr) {
+        emit errorOccurred(tr("Select a layer to move."));
+        return false;
+    }
+    if (deltaX == 0 && deltaY == 0) {
+        return false;
+    }
+    return commitTransform(
+        std::make_unique<core::TranslateLayerCommand>(id, deltaX, deltaY)
+    );
+}
+
 void AppController::selectLayer(core::LayerId id) {
     if (document_->findLayer(id) == nullptr || selectedLayerId_ == id) {
         return;
